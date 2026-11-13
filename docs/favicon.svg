@@ -1,0 +1,17 @@
+<!--
+  The mark: a document page with a small spark/diamond accent suggesting
+  AI-generated content. Dark rounded square with a #76b900 glyph, consistent
+  with the oomscope / shardlock favicon family.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#0b0f0a"/>
+  <!-- document body -->
+  <rect x="8" y="6" width="14" height="18" rx="2" fill="#25301f"/>
+  <!-- text lines -->
+  <rect x="10.5" y="10" width="9" height="1.5" rx="0.75" fill="#76b900"/>
+  <rect x="10.5" y="13" width="6.5" height="1.5" rx="0.75" fill="#4a5e3a"/>
+  <rect x="10.5" y="16" width="8" height="1.5" rx="0.75" fill="#4a5e3a"/>
+  <rect x="10.5" y="19" width="5" height="1.5" rx="0.75" fill="#4a5e3a"/>
+  <!-- spark accent (AI) -->
+  <path d="M22 20 L23.4 23.4 L26.8 24.8 L23.4 26.2 L22 29.6 L20.6 26.2 L17.2 24.8 L20.6 23.4 Z" fill="#76b900"/>
+</svg>

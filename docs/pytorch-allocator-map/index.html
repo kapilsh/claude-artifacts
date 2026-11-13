@@ -1,0 +1,1602 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>PyTorch Allocator Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: reference manual. Sticky section index on the left at desktop width, one reading column with wide figures; color encodes memory kind (device / pinned host / symmetric) in every diagram. */
+:root {
+  --bg: #F2F4F7;
+  --surface: #FFFFFF;
+  --sunk: #E8ECF1;
+  --ink: #131A23;
+  --muted: #586474;
+  --line: #D3DAE3;
+  --line-strong: #8C98A8;
+  --accent: #1E4FD0;
+  --accent-soft: #E2E9FB;
+  --host: #9A5A06;
+  --host-soft: #FAEEDB;
+  --dist: #0D7066;
+  --dist-soft: #DCF0EC;
+  --warn: #A23B1A;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D1218; --surface: #141B24; --sunk: #1A222D; --ink: #E3E8EF; --muted: #98A4B5;
+    --line: #29333F; --line-strong: #5F6B7B; --accent: #82A7FF; --accent-soft: #18233D;
+    --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D1218; --surface: #141B24; --sunk: #1A222D; --ink: #E3E8EF; --muted: #98A4B5;
+  --line: #29333F; --line-strong: #5F6B7B; --accent: #82A7FF; --accent-soft: #18233D;
+  --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0;
+}
+.shell { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 48px; padding-block: 40px 96px; }
+@media (min-width: 1100px) { .shell { grid-template-columns: 210px minmax(0, 1fr); } }
+
+nav.index { display: none; }
+@media (min-width: 1100px) {
+  nav.index { display: block; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13.5px; }
+  nav.index ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+  nav.index li { counter-increment: s; }
+  nav.index a { display: grid; grid-template-columns: 26px 1fr; padding: 5px 8px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+  nav.index a::before { content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 11.5px; padding-top: 1px; }
+  nav.index a:hover, nav.index a:focus-visible { color: var(--ink); background: var(--sunk); }
+  nav.index .nav-head { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 8px; }
+}
+
+main { min-width: 0; }
+.prose { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2.3rem, 5vw, 3.6rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.85rem; font-weight: 600; }
+h3 { font-size: 1.25rem; font-weight: 600; margin-top: 8px; }
+p { margin: 0; }
+section { display: grid; gap: 18px; padding-top: 64px; scroll-margin-top: 16px; }
+.stack { display: grid; gap: 14px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+.eyebrow b { color: var(--accent); font-weight: 600; }
+.lede { font-size: 1.15rem; color: var(--ink); max-width: 64ch; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+:not(pre) > code { background: var(--sunk); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+ul.plain, ol.plain { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; }
+
+header.hero { display: grid; gap: 16px; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13.5px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.dev { background: var(--accent-soft); border-color: var(--accent); }
+.sw.host { background: var(--host-soft); border-color: var(--host); }
+.sw.dist { background: var(--dist-soft); border-color: var(--dist); }
+.sw.cpu { background: var(--surface); border-color: var(--line-strong); }
+
+/* figures */
+figure.fig { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 18px 14px; display: grid; gap: 12px; color: var(--ink); }
+.fig .scroll { overflow-x: auto; }
+.fig svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.fig figcaption { font-size: 13.5px; color: var(--muted); max-width: 80ch; }
+.fig figcaption b { color: var(--ink); font-weight: 600; }
+svg text { font-family: var(--mono); fill: var(--ink); font-size: 12px; }
+svg .ts { font-size: 10.5px; fill: var(--muted); }
+svg .tb { font-weight: 600; font-size: 12.5px; }
+svg .ti { font-size: 11px; }
+svg .lane { font-size: 10.5px; letter-spacing: .08em; fill: var(--muted); }
+svg .big { font-family: var(--display); font-size: 15px; font-weight: 600; }
+.bx { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+.bx2 { fill: var(--sunk); stroke: var(--line-strong); stroke-width: 1.2; }
+.acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.acc-strong { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.4; }
+.hst { fill: var(--host-soft); stroke: var(--host); stroke-width: 1.5; }
+.dst { fill: var(--dist-soft); stroke: var(--dist); stroke-width: 1.5; }
+.e { stroke: var(--ink); stroke-width: 1.3; fill: none; }
+.e.a { stroke: var(--accent); stroke-width: 1.8; }
+.e.h { stroke: var(--host); stroke-width: 1.6; }
+.e.d { stroke: var(--dist); stroke-width: 1.6; }
+.e.dash { stroke-dasharray: 4 4; stroke: var(--line-strong); }
+.e.w { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.rule { stroke: var(--line); stroke-width: 1; }
+.mk { fill: var(--ink); } .mk-a { fill: var(--accent); } .mk-h { fill: var(--host); } .mk-d { fill: var(--dist); } .mk-w { fill: var(--warn); }
+.ta { fill: var(--accent) !important; } .th { fill: var(--host) !important; } .td { fill: var(--dist) !important; } .tw { fill: var(--warn) !important; }
+
+/* tables */
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--sunk); white-space: nowrap; }
+td code { white-space: nowrap; }
+td.wrap code { white-space: normal; }
+td .scope { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+
+/* catalog */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: 500 13px var(--body); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; }
+.chip:hover { border-color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip .n { font-family: var(--mono); font-size: 11px; opacity: .7; margin-left: 4px; }
+.cards { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 820px) { .cards { grid-template-columns: 1fr 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; display: grid; gap: 10px; align-content: start; min-width: 0; border-top: 3px solid var(--line-strong); }
+.card[data-kind="dev"] { border-top-color: var(--accent); }
+.card[data-kind="host"] { border-top-color: var(--host); }
+.card[data-kind="dist"] { border-top-color: var(--dist); }
+.card h4 { margin: 0; font-family: var(--mono); font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.card .grp { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.card dl { margin: 0; display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; }
+.card dt { color: var(--muted); font-size: 12px; padding-top: 1px; }
+.card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.card dd code { font-size: 12.5px; }
+.card p { font-size: 14px; color: var(--ink); }
+
+/* notes */
+.notes { display: grid; gap: 10px; }
+.note { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 14.5px; }
+.note .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding-top: 3px; color: var(--muted); }
+.note.caution { border-left: 3px solid var(--warn); }
+.note.caution .tag { color: var(--warn); }
+.note.info { border-left: 3px solid var(--accent); }
+.note.info .tag { color: var(--accent); }
+@media (max-width: 520px) { .note { grid-template-columns: 1fr; gap: 4px; } }
+
+/* code */
+.code { position: relative; background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.code .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.code pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; color: var(--ink); }
+.code .c { color: var(--muted); }
+.code .k { color: var(--accent); }
+.copy { font: 500 12px var(--body); padding: 3px 10px; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; }
+.examples { display: grid; gap: 14px; }
+
+.steps { counter-reset: st; list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.steps li { counter-increment: st; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.steps li > span { min-width: 0; }
+.stack, ul.plain, ol.plain, .steps { align-content: start; }
+.steps li::before { content: counter(st); font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; text-align: right; }
+
+.two { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 900px) { .two { grid-template-columns: 1fr 1fr; } }
+/* blocks and segments walk-through */
+.free-svg { fill: var(--sunk); stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.sw.free-sw { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line-strong) 3px 4px), var(--bg); border-color: var(--line-strong); }
+.sw.now-sw { background: transparent; border: 2.5px solid var(--warn); }
+.walk { display: grid; gap: 14px; }
+.walk-top { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 960px) { .walk-top { grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr); } }
+.walk-code { align-self: start; }
+.lines { list-style: none; margin: 0; padding: 6px 0; }
+.lines button { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-left: 3px solid transparent; padding: 4px 12px 4px 9px; font: 13px/1.5 var(--mono); color: var(--ink); cursor: pointer; }
+.lines button .ln { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.lines button code { background: none; padding: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lines button:hover { background: var(--surface); }
+.lines button.on { background: var(--accent-soft); border-left-color: var(--accent); }
+.lines button.on .ln { color: var(--accent); font-weight: 600; }
+.walk-panel { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.walk-ctrl { display: flex; gap: 10px; align-items: center; }
+.walk-ctrl input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.btn { font: 500 13px var(--body); padding: 7px 12px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--ink); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.btn-primary:hover:not(:disabled) { border-color: var(--accent); filter: brightness(1.08); }
+.btn:disabled { opacity: .45; cursor: default; }
+.walk-event { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 8px; min-height: 236px; align-content: start; }
+.walk-title { font-family: var(--display); font-size: 1.2rem; font-weight: 600; line-height: 1.25; }
+.walk-title .n { font-family: var(--mono); font-size: 12px; color: var(--accent); margin-right: 10px; vertical-align: 2px; }
+.walk-text { font-size: 14.5px; }
+.walk-notes { margin: 0; padding-left: 1.25em; display: grid; gap: 5px; font-size: 13.5px; color: var(--muted); }
+.walk-notes li::marker { color: var(--accent); }
+.walk-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 760px) { .walk-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; display: grid; gap: 2px; min-width: 0; }
+.stat .k { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.stat .v { font-family: var(--mono); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .d { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stat .d.up { color: var(--warn); }
+.stat .d.down { color: var(--dist); }
+.segs { display: grid; gap: 10px; }
+.seg-row { display: grid; grid-template-columns: 1fr; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+@media (min-width: 760px) { .seg-row { grid-template-columns: 150px minmax(0, 1fr); align-items: center; } }
+.seg-label { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 13px; }
+@media (min-width: 760px) { .seg-label { display: grid; gap: 2px; } }
+.seg-label b { font-family: var(--mono); font-size: 15px; }
+.seg-label span { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.badge { display: inline-block; font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--warn); border: 1px solid var(--warn); border-radius: 3px; padding: 0 5px; margin-left: 8px; vertical-align: 2px; }
+.seg-body { display: grid; gap: 6px; min-width: 0; }
+.seg-bar { display: flex; height: 56px; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; min-width: 0; background: var(--bg); }
+.blk { flex: none; min-width: 4px; height: 100%; border-right: 1px solid var(--line-strong); display: grid; align-content: center; justify-items: center; padding: 0 4px; overflow: hidden; font: 12px/1.3 var(--mono); color: var(--ink); text-align: center; }
+.blk:last-child { border-right: 0; }
+.blk b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.blk span { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.blk.tight b, .blk.tight span { visibility: hidden; }
+.blk.k-param, .blk.k-act { background: var(--accent-soft); }
+.blk.k-grad { background: var(--dist-soft); }
+.blk.k-ws { background: var(--host-soft); }
+.blk.free { background: repeating-linear-gradient(135deg, transparent 0 7px, var(--line) 7px 8px), var(--bg); }
+.blk.now { box-shadow: inset 0 0 0 3px var(--warn); }
+.seg-small { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.seg-small:empty { display: none; }
+.walk-legend { padding-top: 2px; }
+.ch-grid { stroke: var(--line); stroke-width: 1; }
+.ch-res { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linejoin: round; }
+.ch-all { fill: none; stroke: var(--dist); stroke-width: 2.4; stroke-linejoin: round; }
+.ch-area { fill: var(--dist-soft); }
+.ch-cur { stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 4 4; }
+.ch-dot-r { fill: var(--accent); }
+.ch-dot-a { fill: var(--dist); }
+.ch-dot-r.on, .ch-dot-a.on { stroke: var(--surface); stroke-width: 2; }
+.ch-hit { fill: transparent; cursor: pointer; }
+.walk-chart svg { min-width: 640px; }
+footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); max-width: 80ch; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+    <marker id="ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-a"/></marker>
+    <marker id="ah-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-h"/></marker>
+    <marker id="ah-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-d"/></marker>
+    <marker id="ah-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-w"/></marker>
+  </defs>
+</svg>
+
+<div class="shell">
+  <nav class="index" aria-label="Sections">
+    <p class="nav-head">Sections</p>
+    <ol>
+      <li><a href="#path">Allocation path</a></li>
+      <li><a href="#interfaces">Interfaces and registry</a></li>
+      <li><a href="#catalog">Allocator catalog</a></li>
+      <li><a href="#caching">CUDA caching allocator</a></li>
+      <li><a href="#blocks">Blocks and segments</a></li>
+      <li><a href="#mempool">Custom MemPools</a></li>
+      <li><a href="#host">Pinned host memory</a></li>
+      <li><a href="#distributed">Distributed memory</a></li>
+      <li><a href="#config">Configuration keys</a></li>
+      <li><a href="#sources">Source files</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="hero" id="path">
+      <p class="eyebrow">Reference · PyTorch <b>main</b> @ 9664c41 · 18 Oct 2026</p>
+      <h1>PyTorch Allocator Map</h1>
+      <p class="lede">This page shows each memory allocator in PyTorch. It shows how a tensor gets its memory, how each allocator caches memory, and how a custom MemPool connects to the CUDA caching allocator.</p>
+      <div class="legend" aria-label="Color key">
+        <span><i class="sw dev"></i>Device memory</span>
+        <span><i class="sw host"></i>Pinned host memory</span>
+        <span><i class="sw dist"></i>Symmetric memory</span>
+        <span><i class="sw cpu"></i>CPU and other</span>
+      </div>
+
+      <figure class="fig">
+        <div class="scroll">
+        <svg viewBox="0 0 960 466" role="img" aria-label="A tensor allocation goes from Tensor to StorageImpl, which calls an allocator from a per-device lookup table. The table selects one of six backend families. Each backend calls a driver or OS primitive.">
+          <!-- Row A: object chain -->
+          <rect class="bx" x="20" y="16" width="180" height="48" rx="5"/>
+          <text class="tb" x="110" y="45" text-anchor="middle">torch.Tensor</text>
+          <rect class="bx" x="260" y="16" width="180" height="48" rx="5"/>
+          <text class="tb" x="350" y="45" text-anchor="middle">TensorImpl</text>
+          <rect class="bx" x="500" y="16" width="180" height="48" rx="5"/>
+          <text class="tb" x="590" y="45" text-anchor="middle">StorageImpl</text>
+          <rect class="bx" x="740" y="16" width="200" height="48" rx="5"/>
+          <text class="tb" x="840" y="36" text-anchor="middle">DataPtr</text>
+          <text class="ts" x="840" y="53" text-anchor="middle">ptr · ctx · deleter · device</text>
+          <line class="e" x1="200" y1="40" x2="258" y2="40" marker-end="url(#ah)"/>
+          <text class="ts" x="229" y="33" text-anchor="middle">impl</text>
+          <line class="e" x1="440" y1="40" x2="498" y2="40" marker-end="url(#ah)"/>
+          <text class="ts" x="469" y="33" text-anchor="middle">storage</text>
+          <line class="e" x1="680" y1="40" x2="738" y2="40" marker-end="url(#ah)"/>
+          <text class="ts" x="709" y="33" text-anchor="middle">owns</text>
+          <!-- Row B: lookup -->
+          <rect class="bx2" x="20" y="112" width="920" height="52" rx="5"/>
+          <text class="tb" x="175" y="134" text-anchor="middle">c10::GetAllocator(type)</text>
+          <text class="ts" x="175" y="152" text-anchor="middle">device and CPU memory</text>
+          <text class="tb" x="480" y="134" text-anchor="middle">at::getHostAllocator(type)</text>
+          <text class="ts" x="480" y="152" text-anchor="middle">pinned host memory</text>
+          <text class="tb" x="785" y="134" text-anchor="middle">symm_mem::get_allocator(type)</text>
+          <text class="ts" x="785" y="152" text-anchor="middle">symmetric memory</text>
+          <line class="e" x1="590" y1="64" x2="590" y2="110" marker-end="url(#ah)"/>
+          <text class="ts" x="598" y="92">allocate(nbytes)</text>
+          <line class="e" x1="840" y1="110" x2="840" y2="66" marker-end="url(#ah)"/>
+          <text class="ts" x="848" y="92">returns DataPtr</text>
+          <!-- column arrows -->
+          <line class="e" x1="92.5" y1="164" x2="92.5" y2="196" marker-end="url(#ah)"/>
+          <line class="e a" x1="247.5" y1="164" x2="247.5" y2="196" marker-end="url(#ah-a)"/>
+          <line class="e h" x1="402.5" y1="164" x2="402.5" y2="196" marker-end="url(#ah-h)"/>
+          <line class="e a" x1="557.5" y1="164" x2="557.5" y2="196" marker-end="url(#ah-a)"/>
+          <line class="e a" x1="712.5" y1="164" x2="712.5" y2="196" marker-end="url(#ah-a)"/>
+          <line class="e d" x1="867.5" y1="164" x2="867.5" y2="196" marker-end="url(#ah-d)"/>
+          <!-- Row C: backends -->
+          <g>
+            <rect class="bx" x="20" y="198" width="145" height="160" rx="5"/>
+            <text class="tb" x="92.5" y="222" text-anchor="middle">CPU</text>
+            <line class="rule" x1="30" y1="232" x2="155" y2="232"/>
+            <text class="ti" x="30" y="254">DefaultCPU</text>
+            <text class="ti" x="30" y="274">MapAllocator</text>
+            <text class="ti" x="30" y="294">MetaAllocator</text>
+            <text class="ti" x="30" y="314">mobile caching</text>
+            <text class="ti" x="30" y="334">mobile profiling</text>
+          </g>
+          <g>
+            <rect class="acc" x="175" y="198" width="145" height="160" rx="5"/>
+            <text class="tb ta" x="247.5" y="222" text-anchor="middle">CUDA</text>
+            <line class="rule" x1="185" y1="232" x2="310" y2="232"/>
+            <text class="ti" x="185" y="254">native caching</text>
+            <text class="ti" x="185" y="274">cudaMallocAsync</text>
+            <text class="ti" x="185" y="294">Pluggable (.so)</text>
+            <text class="ti" x="185" y="314">MemPool</text>
+            <text class="ti" x="185" y="334">graph pools</text>
+          </g>
+          <g>
+            <rect class="hst" x="330" y="198" width="145" height="160" rx="5"/>
+            <text class="tb th" x="402.5" y="222" text-anchor="middle">Pinned host</text>
+            <line class="rule" x1="340" y1="232" x2="465" y2="232"/>
+            <text class="ti" x="340" y="254">CachingHost</text>
+            <text class="ti" x="340" y="274">  for CUDA</text>
+            <text class="ti" x="340" y="294">  for XPU</text>
+            <text class="ti" x="340" y="314">MPSPinned</text>
+            <text class="ti" x="340" y="334">PrivateUse1</text>
+          </g>
+          <g>
+            <rect class="acc" x="485" y="198" width="145" height="160" rx="5"/>
+            <text class="tb ta" x="557.5" y="222" text-anchor="middle">MPS</text>
+            <line class="rule" x1="495" y1="232" x2="620" y2="232"/>
+            <text class="ti" x="495" y="254">heap allocator</text>
+            <text class="ti" x="495" y="274">private storage</text>
+            <text class="ti" x="495" y="294">shared storage</text>
+            <text class="ti" x="495" y="314">heap tiers</text>
+            <text class="ti" x="495" y="334">watermarks</text>
+          </g>
+          <g>
+            <rect class="acc" x="640" y="198" width="145" height="160" rx="5"/>
+            <text class="tb ta" x="712.5" y="222" text-anchor="middle">XPU</text>
+            <line class="rule" x1="650" y1="232" x2="775" y2="232"/>
+            <text class="ti" x="650" y="254">native caching</text>
+            <text class="ti" x="650" y="274">expandable segs</text>
+            <text class="ti" x="650" y="294">XPU MemPool</text>
+            <text class="ti" x="650" y="314">graph pools</text>
+          </g>
+          <g>
+            <rect class="dst" x="795" y="198" width="145" height="160" rx="5"/>
+            <text class="tb td" x="867.5" y="222" text-anchor="middle">Symmetric</text>
+            <line class="rule" x1="805" y1="232" x2="930" y2="232"/>
+            <text class="ti" x="805" y="254">CUDA (VMM)</text>
+            <text class="ti" x="805" y="274">NVSHMEM</text>
+            <text class="ti" x="805" y="294">NCCL windows</text>
+            <text class="ti" x="805" y="314">as a MemPool</text>
+          </g>
+          <!-- arrows to primitives -->
+          <line class="e" x1="92.5" y1="358" x2="92.5" y2="388" marker-end="url(#ah)"/>
+          <line class="e" x1="247.5" y1="358" x2="247.5" y2="388" marker-end="url(#ah)"/>
+          <line class="e" x1="402.5" y1="358" x2="402.5" y2="388" marker-end="url(#ah)"/>
+          <line class="e" x1="557.5" y1="358" x2="557.5" y2="388" marker-end="url(#ah)"/>
+          <line class="e" x1="712.5" y1="358" x2="712.5" y2="388" marker-end="url(#ah)"/>
+          <line class="e" x1="867.5" y1="358" x2="867.5" y2="388" marker-end="url(#ah)"/>
+          <!-- Row D: primitives -->
+          <rect class="bx2" x="20" y="390" width="145" height="56" rx="5"/>
+          <text class="ti" x="92.5" y="413" text-anchor="middle">posix_memalign</text>
+          <text class="ts" x="92.5" y="431" text-anchor="middle">mmap · shm_open</text>
+          <rect class="bx2" x="175" y="390" width="145" height="56" rx="5"/>
+          <text class="ti" x="247.5" y="413" text-anchor="middle">cudaMalloc</text>
+          <text class="ts" x="247.5" y="431" text-anchor="middle">cuMemCreate + Map</text>
+          <rect class="bx2" x="330" y="390" width="145" height="56" rx="5"/>
+          <text class="ti" x="402.5" y="413" text-anchor="middle">cudaHostAlloc</text>
+          <text class="ts" x="402.5" y="431" text-anchor="middle">cudaHostRegister</text>
+          <rect class="bx2" x="485" y="390" width="145" height="56" rx="5"/>
+          <text class="ti" x="557.5" y="413" text-anchor="middle">MTLHeap</text>
+          <text class="ts" x="557.5" y="431" text-anchor="middle">MTLBuffer</text>
+          <rect class="bx2" x="640" y="390" width="145" height="56" rx="5"/>
+          <text class="ti" x="712.5" y="413" text-anchor="middle">sycl malloc_device</text>
+          <text class="ts" x="712.5" y="431" text-anchor="middle">virtual mem map</text>
+          <rect class="bx2" x="795" y="390" width="145" height="56" rx="5"/>
+          <text class="ti" x="867.5" y="413" text-anchor="middle">cuMem + IPC</text>
+          <text class="ts" x="867.5" y="431" text-anchor="middle">nvshmem · NCCL</text>
+        </svg>
+        </div>
+        <figcaption><b>Figure 1.</b> Each tensor allocation goes through one lookup table for each kind of memory. The table returns the allocator for the device type. That allocator calls a driver or OS function only when its cache cannot supply a block.</figcaption>
+      </figure>
+
+      <div class="prose stack">
+        <p>PyTorch does not call <code>malloc</code> or <code>cudaMalloc</code> directly for tensor memory. Each <code>StorageImpl</code> holds a pointer to a <code>c10::Allocator</code>. The allocator returns a <code>DataPtr</code>. The <code>DataPtr</code> holds the address, a context pointer, a deleter function, and the device.</p>
+        <p>When the last reference to the storage goes away, PyTorch calls the deleter. Thus the allocator controls the free path as well as the allocation path. This is how a caching allocator keeps a freed block for the next request.</p>
+      </div>
+    </header>
+
+    <section id="interfaces">
+      <p class="eyebrow">c10/core/ · aten/src/ATen/core/</p>
+      <h2>Interfaces and registry</h2>
+      <div class="prose stack">
+        <p>All allocators implement one of four interfaces. The first three come from the same base class. The symmetric memory interface is separate because it must also exchange handles between ranks.</p>
+      </div>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Interface</th><th>Adds</th><th>Implemented by</th></tr></thead>
+          <tbody>
+            <tr><td><code>c10::Allocator</code></td><td class="wrap"><code>allocate(n) → DataPtr</code>, <code>raw_deleter()</code>, <code>copy_data()</code></td><td>All allocators. One entry for each <code>DeviceType</code>.</td></tr>
+            <tr><td><code>c10::DeviceAllocator</code></td><td class="wrap"><code>emptyCache</code>, <code>recordStream</code>, <code>getDeviceStats</code>, <code>resetPeakStats</code></td><td>CUDA, XPU, MPS, and PrivateUse1 device allocators.</td></tr>
+            <tr><td><code>at::HostAllocator</code></td><td class="wrap"><code>record_event</code>, <code>empty_cache</code>, <code>get_stats</code></td><td>Pinned host allocators. One entry for each device type.</td></tr>
+            <tr><td><code>SymmetricMemoryAllocator</code></td><td class="wrap"><code>alloc(size, device, group)</code>, <code>free</code>, <code>rendezvous</code></td><td>CUDA, NVSHMEM, and NCCL backends in <code>c10d</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose stack">
+        <h3>How the registry selects an allocator</h3>
+        <p><code>SetAllocator(type, alloc, priority)</code> writes to a fixed table. The table has one slot for each <code>DeviceType</code>. A call with a lower priority than the current entry has no effect.</p>
+        <p><code>REGISTER_ALLOCATOR</code> calls <code>SetAllocator</code> during static initialization. <code>REGISTER_HOST_ALLOCATOR</code> does the same for the host table. The CUDA caching allocator writes its slot when CUDA initializes. On ROCm, it also writes the slot that HIP code reads as CUDA.</p>
+        <p>To replace the CPU allocator at run time, call <code>c10::SetCPUAllocator(alloc, priority)</code>. To replace the CUDA allocator, use <code>torch.cuda.memory.change_current_allocator()</code> before the first CUDA allocation.</p>
+      </div>
+    </section>
+
+    <section id="catalog">
+      <p class="eyebrow">Inventory</p>
+      <h2>Allocator catalog</h2>
+      <p class="prose">Select a group to filter the list. Each card gives the source file, the function that supplies new memory, and how to select the allocator.</p>
+      <div class="chips" role="group" aria-label="Filter allocators" id="chips"></div>
+      <div class="cards" id="cards"></div>
+    </section>
+
+    <section id="caching">
+      <p class="eyebrow">c10/cuda/CUDACachingAllocator.cpp</p>
+      <h2>Inside the CUDA caching allocator</h2>
+      <div class="prose stack">
+        <p>The default CUDA backend is <code>NativeCachingAllocator</code>. It holds one <code>DeviceCachingAllocator</code> for each GPU. Each device allocator has a recursive mutex, two default block pools, and a map of private pools.</p>
+        <p>Figure 2 shows one call to <code>malloc</code>. The blue path is the hook that custom MemPools use. <a href="#mempool">Custom MemPools</a> gives the details of that hook. <a href="#blocks">Blocks and segments</a> shows how one layer fills the pools.</p>
+      </div>
+
+      <figure class="fig">
+        <div class="scroll">
+        <svg viewBox="0 0 980 470" role="img" aria-label="malloc rounds the size, then get_pool scans active pool scopes. If a scope filter matches, the request goes to that PrivatePool, else to the device BlockPools. get_free_block finds a cached block. On a miss, alloc_block gets a new segment from cudaMalloc, an expandable segment, or the pool's own allocator. If that fails, the allocator borrows from use_on_oom pools.">
+          <!-- row 1 -->
+          <rect class="bx" x="20" y="96" width="140" height="48" rx="5"/>
+          <text class="tb" x="90" y="116" text-anchor="middle">malloc()</text>
+          <text class="ts" x="90" y="133" text-anchor="middle">size, stream</text>
+          <rect class="bx" x="190" y="96" width="130" height="48" rx="5"/>
+          <text class="tb" x="255" y="116" text-anchor="middle">round_size()</text>
+          <text class="ts" x="255" y="133" text-anchor="middle">512 B steps</text>
+          <rect class="acc-strong" x="350" y="96" width="170" height="48" rx="5"/>
+          <text class="tb ta" x="435" y="116" text-anchor="middle">get_pool()</text>
+          <text class="ts" x="435" y="133" text-anchor="middle">scan scopes, LIFO</text>
+          <text class="ts" x="600" y="28">no scope matches</text>
+          <rect class="bx" x="600" y="36" width="180" height="52" rx="5"/>
+          <text class="tb" x="690" y="58" text-anchor="middle">device BlockPools</text>
+          <text class="ts" x="690" y="76" text-anchor="middle">small ≤1 MB · large</text>
+          <rect class="acc" x="600" y="152" width="180" height="52" rx="5"/>
+          <text class="tb ta" x="690" y="174" text-anchor="middle">PrivatePool[id]</text>
+          <text class="ts" x="690" y="192" text-anchor="middle">own small · large pools</text>
+          <text class="ts ta" x="600" y="222">a scope filter returns true</text>
+          <rect class="bx" x="815" y="96" width="145" height="48" rx="5"/>
+          <text class="tb" x="887" y="116" text-anchor="middle">get_free_block()</text>
+          <text class="ts" x="887" y="133" text-anchor="middle">best fit, same stream</text>
+          <text class="ts" x="887" y="86" text-anchor="middle">hit: return Block</text>
+          <line class="e" x1="160" y1="120" x2="188" y2="120" marker-end="url(#ah)"/>
+          <line class="e" x1="320" y1="120" x2="348" y2="120" marker-end="url(#ah)"/>
+          <path class="e" d="M520,112 C562,112 560,62 598,62" marker-end="url(#ah)"/>
+          <path class="e a" d="M520,128 C562,128 560,178 598,178" marker-end="url(#ah-a)"/>
+          <path class="e" d="M780,62 C800,62 795,112 813,112" marker-end="url(#ah)"/>
+          <path class="e a" d="M780,178 C800,178 795,128 813,128" marker-end="url(#ah-a)"/>
+          <!-- miss -->
+          <line class="e" x1="887" y1="144" x2="887" y2="298" marker-end="url(#ah)"/>
+          <text class="ts" x="895" y="236">miss</text>
+          <rect class="bx" x="815" y="300" width="145" height="48" rx="5"/>
+          <text class="tb" x="887" y="320" text-anchor="middle">alloc_block()</text>
+          <text class="ts" x="887" y="337" text-anchor="middle">new segment</text>
+          <rect class="bx2" x="560" y="300" width="200" height="48" rx="5"/>
+          <text class="tb" x="660" y="320" text-anchor="middle">allocPrimitive()</text>
+          <text class="ts" x="660" y="337" text-anchor="middle">select segment source</text>
+          <line class="e" x1="815" y1="324" x2="762" y2="324" marker-end="url(#ah)"/>
+          <!-- sources -->
+          <rect class="bx" x="300" y="244" width="210" height="44" rx="5"/>
+          <text class="tb" x="405" y="262" text-anchor="middle">cudaMalloc</text>
+          <text class="ts" x="405" y="279" text-anchor="middle">expandable segments off</text>
+          <rect class="bx" x="300" y="302" width="210" height="44" rx="5"/>
+          <text class="tb" x="405" y="320" text-anchor="middle">cuMemCreate + cuMemMap</text>
+          <text class="ts" x="405" y="337" text-anchor="middle">expandable segments on</text>
+          <rect class="acc" x="300" y="360" width="210" height="44" rx="5"/>
+          <text class="tb ta" x="405" y="378" text-anchor="middle">raw_alloc_with_stream()</text>
+          <text class="ts" x="405" y="395" text-anchor="middle">pool has its own allocator</text>
+          <path class="e" d="M560,318 C535,318 535,266 512,266" marker-end="url(#ah)"/>
+          <line class="e" x1="560" y1="324" x2="512" y2="324" marker-end="url(#ah)"/>
+          <path class="e a" d="M560,330 C535,330 535,382 512,382" marker-end="url(#ah-a)"/>
+          <!-- fallback -->
+          <rect class="bx" x="20" y="300" width="240" height="66" rx="5"/>
+          <text class="tb" x="140" y="322" text-anchor="middle">try_mempool_fallback()</text>
+          <text class="ts" x="140" y="340" text-anchor="middle">borrow a free block from</text>
+          <text class="ts" x="140" y="355" text-anchor="middle">pools with use_on_oom=True</text>
+          <path class="e w" d="M887,348 L887,444 L140,444 L140,368" marker-end="url(#ah-w)"/>
+          <text class="ts tw" x="520" y="460" text-anchor="middle">new segment fails</text>
+        </svg>
+        </div>
+        <figcaption><b>Figure 2.</b> One call to <code>malloc</code>. The pool lookup happens before the cache search. Thus a request that matches a scope never takes a block from the default pools, and a request that does not match never takes a block from a private pool. A pool with its own allocator never uses expandable segments.</figcaption>
+      </figure>
+
+      <div class="two">
+        <div class="stack prose">
+          <h3>Sizes and segments</h3>
+          <ul class="plain">
+            <li>The allocator rounds each request up to a multiple of 512 bytes. With <code>roundup_power2_divisions</code>, it rounds large requests to fractions of a power of two.</li>
+            <li>Requests up to 1 MB use the small pool. The small pool gets 2 MB segments from the driver.</li>
+            <li>Requests from 1 MB to 10 MB get a 20 MB segment by default. Use <code>large_segment_size_mb</code> to change this size.</li>
+            <li>Requests above 10 MB get a segment rounded up to 2 MB.</li>
+            <li>The allocator does not split a cached block larger than <code>max_split_size_mb</code>.</li>
+          </ul>
+        </div>
+        <div class="stack prose">
+          <h3>Steps when the cache has no block</h3>
+          <ol class="steps">
+            <li><span>Run the registered free-memory callbacks, then search the cache again.</span></li>
+            <li><span>Get a new segment through <code>alloc_block()</code>.</span></li>
+            <li><span>Borrow a free block from pools that have <code>use_on_oom=True</code>.</span></li>
+            <li><span>Release cached segments that have no live blocks, then try step 2 again.</span></li>
+            <li><span>Release all cached segments, then try step 2 again. This step does not run during graph capture.</span></li>
+            <li><span>Raise <code>torch.OutOfMemoryError</code>.</span></li>
+          </ol>
+        </div>
+      </div>
+      <div class="prose stack">
+        <h3>Streams and the free path</h3>
+        <p>Each block records the stream that allocated it. <code>get_free_block()</code> returns only blocks from the same stream. When you call <code>tensor.record_stream(s)</code>, the allocator records an event on <code>s</code> at free time. The block goes back to its pool only after that event completes.</p>
+        <p>A freed block goes back to the pool that owns it. A block from a private pool stays in that pool. The allocator joins a freed block with free neighbors in the same segment.</p>
+        <h3>Expandable segments</h3>
+        <p>With <code>expandable_segments:True</code>, the allocator reserves one large virtual address range for each stream. It maps physical pages into the range as the range grows. This decreases fragmentation between segments. Processes cannot share these tensors through CUDA IPC.</p>
+      </div>
+    </section>
+
+    <section id="blocks">
+      <p class="eyebrow">c10/cuda/CUDACachingAllocator.cpp · struct Block</p>
+      <h2>Blocks and segments</h2>
+      <div class="prose stack">
+        <p>A <b>segment</b> is one range of device memory. The allocator gets each segment from the driver with one <code>cudaMalloc</code> call. A <b>block</b> is a part of a segment. Each tensor uses one block.</p>
+        <p>There is no segment object in the code. Each <code>Block</code> has a <code>prev</code> pointer and a <code>next</code> pointer to its neighbors in the same segment, in address order. The first block of a segment has <code>prev = null</code>. To find all of a segment, the allocator follows these pointers.</p>
+        <p>Reserved memory is the total size of all segments. Allocated memory is the total size of the blocks that tensors use. The difference is cached memory that the next request can use without a driver call.</p>
+      </div>
+
+      <figure class="fig">
+        <div class="scroll">
+        <svg viewBox="0 0 960 330" role="img" aria-label="Segment S3 of 20 MiB is split into five blocks: x, y, cuBLAS workspace, dy, and a free block. The blocks are linked by prev and next pointers. The free block is in the large pool's sorted set. The allocated blocks are in active_blocks. A sharded hash map from pointer to Block lets the deleter find a block.">
+          <text class="tb" x="40" y="24">Segment S3 · one cudaMalloc · 20 MiB</text>
+          <text class="ts" x="920" y="24" text-anchor="end">state after step 6 of the walk-through below</text>
+          <text class="ts" x="40" y="50">base address · prev = null</text>
+          <text class="ts" x="920" y="50" text-anchor="end">next = null</text>
+          <rect class="acc" x="40" y="58" width="88" height="52"/>
+          <text class="tb" x="84" y="81" text-anchor="middle">x</text>
+          <text class="ts" x="84" y="98" text-anchor="middle">2 MiB</text>
+          <rect class="acc" x="128" y="58" width="176" height="52"/>
+          <text class="tb" x="216" y="81" text-anchor="middle">y</text>
+          <text class="ts" x="216" y="98" text-anchor="middle">4 MiB</text>
+          <rect class="hst" x="304" y="58" width="357.5" height="52"/>
+          <text class="tb" x="482.75" y="81" text-anchor="middle">cuBLAS workspace</text>
+          <text class="ts" x="482.75" y="98" text-anchor="middle">8.125 MiB</text>
+          <rect class="acc" x="661.5" y="58" width="176" height="52"/>
+          <text class="tb" x="749.5" y="81" text-anchor="middle">dy</text>
+          <text class="ts" x="749.5" y="98" text-anchor="middle">4 MiB</text>
+          <rect class="free-svg" x="837.5" y="58" width="82.5" height="52"/>
+          <text class="tb" x="878.75" y="81" text-anchor="middle">free</text>
+          <text class="ts" x="878.75" y="98" text-anchor="middle">1.875 MiB</text>
+          <path class="e" d="M84,112 C84,134 216,134 216,112" marker-start="url(#ah)" marker-end="url(#ah)"/>
+          <path class="e" d="M216,112 C216,134 482,134 482,112" marker-start="url(#ah)" marker-end="url(#ah)"/>
+          <path class="e" d="M483,112 C483,134 749,134 749,112" marker-start="url(#ah)" marker-end="url(#ah)"/>
+          <path class="e" d="M750,112 C750,134 878,134 878,112" marker-start="url(#ah)" marker-end="url(#ah)"/>
+          <text class="ts" x="150" y="148" text-anchor="middle">prev / next</text>
+
+          <rect class="bx" x="40" y="206" width="270" height="96" rx="5"/>
+          <text class="tb" x="56" y="230">allocated_blocks</text>
+          <text class="ts" x="56" y="250">67 hash maps: ptr → Block*</text>
+          <text class="ts" x="56" y="268">The tensor's DataPtr holds only ptr.</text>
+          <text class="ts" x="56" y="286">free(ptr) finds the Block here.</text>
+
+          <rect class="bx" x="345" y="206" width="270" height="96" rx="5"/>
+          <text class="tb" x="361" y="230">active_blocks</text>
+          <text class="ts" x="361" y="250">set of blocks in use</text>
+          <text class="ti" x="361" y="276">x · y · workspace · dy</text>
+
+          <rect class="bx" x="650" y="206" width="270" height="96" rx="5"/>
+          <text class="tb" x="666" y="230">large_blocks.blocks</text>
+          <text class="ts" x="666" y="250">free blocks, sorted by</text>
+          <text class="ts" x="666" y="266">(stream, size, counter, address)</text>
+          <text class="ti" x="666" y="290">1.875 MiB · S3</text>
+
+          <path class="e a" d="M216,112 C216,170 175,170 175,204" marker-end="url(#ah-a)"/>
+          <text class="ts ta" x="206" y="184">ptr of y</text>
+          <path class="e" d="M482,160 L480,204" marker-end="url(#ah)"/>
+          <text class="ts" x="490" y="186">in use</text>
+          <path class="e" d="M878,112 C878,170 785,170 785,204" marker-end="url(#ah)"/>
+          <text class="ts" x="840" y="186">free</text>
+        </svg>
+        </div>
+        <figcaption><b>Figure 3.</b> One segment as the allocator stores it. The blocks form a linked list in address order. Each free block is also in the pool's sorted set, which the best-fit search reads. When a tensor is freed, the deleter gives only the address. The allocator uses the hash map to find the block.</figcaption>
+      </figure>
+
+      <h3>Rules for a new block</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Rounded request</th><th>Pool</th><th>New segment size</th><th>Split the rest of the block when</th></tr></thead>
+          <tbody>
+            <tr><td>1 MiB or less</td><td>small</td><td>2 MiB</td><td>the rest is 512 B or more</td></tr>
+            <tr><td>More than 1 MiB, less than 10 MiB</td><td>large</td><td>20 MiB (<code>large_segment_size_mb</code>)</td><td>the rest is more than 1 MiB, and the request is less than <code>max_split_size_mb</code></td></tr>
+            <tr><td>10 MiB or more</td><td>large</td><td>the request, rounded up to 2 MiB</td><td>same as the row above</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="plain prose">
+        <li><b>Best fit.</b> The allocator takes the smallest free block in the pool that is large enough and was used on the same stream. It does not take the first block by address.</li>
+        <li><b>No split.</b> If the rest is too small to split, the tensor gets all of the block. The block keeps its full size, and <code>requested_size</code> records the real request.</li>
+        <li><b>Merge.</b> When a block is freed, the allocator joins it with a free block before it and a free block after it in the same segment.</li>
+        <li><b>Release.</b> <code>empty_cache()</code> calls <code>cudaFree</code> only for a segment that is one free block. A segment with one live block stays reserved.</li>
+      </ul>
+
+      <h3 id="walkthrough">Walk-through: one <code>nn.Linear</code> layer</h3>
+      <p class="prose">This example runs one forward pass and one backward pass of a linear layer in fp32 on one stream, with the default settings. Each step is one call to the allocator. Select <b>Next</b>, or select a line of code.</p>
+
+      <div class="walk" id="walk">
+        <div class="walk-top">
+          <div class="code walk-code">
+            <div class="bar"><span>linear_step.py</span><span id="walk-count" class="mono"></span></div>
+            <ol class="lines" id="walk-lines"></ol>
+          </div>
+          <div class="walk-panel">
+            <div class="walk-ctrl">
+              <button type="button" class="btn" id="walk-prev" aria-label="Previous step">◀ Back</button>
+              <input type="range" id="walk-range" min="1" max="13" value="1" aria-label="Step">
+              <button type="button" class="btn btn-primary" id="walk-next" aria-label="Next step">Next ▶</button>
+            </div>
+            <div class="walk-event" aria-live="polite">
+              <p class="walk-title" id="walk-title"></p>
+              <p class="walk-text" id="walk-text"></p>
+              <ol class="walk-notes" id="walk-notes"></ol>
+            </div>
+          </div>
+        </div>
+        <div class="walk-stats" id="walk-stats"></div>
+        <div class="segs" id="walk-segs" aria-label="Segments and blocks after this step"></div>
+        <div class="walk-legend legend">
+          <span><i class="sw dev"></i>Parameter or activation</span>
+          <span><i class="sw dist"></i>Gradient</span>
+          <span><i class="sw host"></i>cuBLAS workspace</span>
+          <span><i class="sw free-sw"></i>Free block (cached)</span>
+          <span><i class="sw now-sw"></i>Changed in this step</span>
+        </div>
+        <figure class="fig walk-chart">
+          <div class="scroll"><svg id="walk-chart" viewBox="0 0 960 200" role="img" aria-label="Reserved and allocated memory after each step."></svg></div>
+          <figcaption><b>Figure 4.</b> Reserved and allocated memory after each step. Reserved memory goes up only when the allocator makes a new segment. It does not go down when tensors are freed. Each bar above uses its own scale. The label gives the real segment size.</figcaption>
+        </figure>
+      </div>
+
+      <h3>What the walk-through shows</h3>
+      <ul class="plain prose">
+        <li>Tensors of 10 MiB or more get a segment of their own with no spare space (steps 1 and 7).</li>
+        <li>Small tensors share a 2 MiB segment (steps 2 and 8).</li>
+        <li>Mid-size tensors share a 20 MiB segment. One segment holds the input, the output, the output gradient, and the cuBLAS workspace (steps 3 to 6).</li>
+        <li>The workspace stays allocated in the middle of segment S3. After step 11, S3 has 11.875 MiB free, but in two parts of 6 MiB and 5.875 MiB. A request for 8 MiB cannot use either part and needs a new segment. This is fragmentation.</li>
+        <li>For the same reason, <code>empty_cache()</code> releases nothing at step 12.</li>
+        <li>At step 13, best fit puts the new input in the 5.875 MiB part, not in the 6 MiB part at the lower address.</li>
+      </ul>
+      <div class="notes">
+        <div class="note info"><span class="tag">Note</span><p>In the next backward pass, <code>weight.grad</code> already exists. The new 32 MiB result of the matrix multiply is then a temporary that <code>AccumulateGrad</code> adds in place and frees. No free block is large enough for it, so the allocator makes another 32 MiB segment. Call <code>optimizer.zero_grad()</code> (which sets gradients to <code>None</code> by default) before backward. The new gradient can then use the block of the old gradient.</p></div>
+        <div class="note caution"><span class="tag">Caution</span><p>The page computes these states from the allocator rules for an Ampere or Ada GPU. On Hopper and Blackwell, the default workspace is 32 MiB, so it gets a segment of its own. Some kernels also make short temporary allocations that this replay does not show. The CUDA context and the cuBLAS handle use memory outside the allocator, so <code>nvidia-smi</code> shows more than the reserved value.</p></div>
+      </div>
+
+      <h3>Compare with your GPU</h3>
+      <div class="code">
+        <div class="bar"><span>Print the segments and blocks after the walk-through</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="k">import</span> torch, torch.nn <span class="k">as</span> nn
+
+torch.cuda.memory._record_memory_history(max_entries=<span class="k">100_000</span>)
+
+layer = nn.Linear(<span class="k">2048</span>, <span class="k">4096</span>, device=<span class="k">"cuda"</span>)
+x = torch.randn(<span class="k">256</span>, <span class="k">2048</span>, device=<span class="k">"cuda"</span>)
+y = layer(x)
+dy = torch.randn_like(y)
+y.backward(dy)
+<span class="k">del</span> y
+<span class="k">del</span> dy
+<span class="k">del</span> x
+torch.cuda.empty_cache()
+x = torch.randn(<span class="k">256</span>, <span class="k">2048</span>, device=<span class="k">"cuda"</span>)
+
+MiB = <span class="k">2</span> ** <span class="k">20</span>
+<span class="k">for</span> seg <span class="k">in</span> torch.cuda.memory_snapshot():
+    blocks = [(round(b[<span class="k">"size"</span>] / MiB, <span class="k">3</span>), b[<span class="k">"state"</span>]) <span class="k">for</span> b <span class="k">in</span> seg[<span class="k">"blocks"</span>]]
+    print(seg[<span class="k">"segment_type"</span>], seg[<span class="k">"total_size"</span>] / MiB, blocks)
+
+<span class="c"># Open the file at pytorch.org/memory_viz to see each step.</span>
+torch.cuda.memory._dump_snapshot(<span class="k">"linear.pickle"</span>)</pre>
+      </div>
+    </section>
+
+    <section id="mempool">
+      <p class="eyebrow">aten/src/ATen/cuda/MemPool.cpp · torch/cuda/memory.py</p>
+      <h2>Custom MemPools</h2>
+      <div class="prose stack">
+        <p>A MemPool is a private part of the CUDA caching allocator. It has its own small and large block pools. It can also have its own allocator for new segments. Blocks in a MemPool never mix with blocks in the default pools.</p>
+        <p>CUDA graph pools use the same mechanism. A <code>torch.cuda.MemPool</code> object and a CUDA graph pool are both a <code>PrivatePool</code> inside the device allocator.</p>
+      </div>
+
+      <h3>Parts of a pool</h3>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Part</th><th>Where</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>MempoolId_t</code></td><td><code>MemPool.cpp</code></td><td>A pair of integers. A pool that you make gets <code>{0, uid}</code>. A pool that a CUDA graph makes gets <code>{uuid, 0}</code>. The value <code>{0, 0}</code> means "no pool".</td></tr>
+            <tr><td><code>PrivatePool</code></td><td><code>CUDACachingAllocator.cpp</code></td><td>Holds <code>large_blocks</code>, <code>small_blocks</code>, an optional <code>allocator_</code>, <code>use_count</code>, and a count of live segments.</td></tr>
+            <tr><td><code>graph_pools</code></td><td>device allocator</td><td>Map from <code>MempoolId_t</code> to <code>PrivatePool</code>. The name is from CUDA graphs. User pools are in the same map.</td></tr>
+            <tr><td><code>allocation_scopes_</code></td><td>device allocator</td><td>A list of <code>{pool id, filter}</code> pairs. <code>get_pool()</code> reads it from the last entry to the first. The first filter that returns true selects the pool.</td></tr>
+            <tr><td><code>use_on_oom_pools</code></td><td>device allocator</td><td>Pools that can lend free blocks when a normal allocation fails.</td></tr>
+            <tr><td><code>no_split_pools</code></td><td>device allocator</td><td>Pools whose blocks the allocator never splits.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Who opens a routing scope</h3>
+      <p class="prose">A scope starts with <code>beginAllocateToPool(id, filter)</code> and stops with <code>endAllocateToPool(id)</code>. The filter receives the stream of each request. Different callers use different filters.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Caller</th><th>Filter returns true when</th><th>Pool</th></tr></thead>
+          <tbody>
+            <tr><td><code>torch.cuda.use_mem_pool(pool)</code></td><td>The request comes from the thread that entered the context.</td><td>Your MemPool</td></tr>
+            <tr><td><code>CUDAGraph.capture_begin()</code></td><td>The stream is part of this capture. Forked streams that join the capture also match.</td><td>The pool you give, or a new <code>{uuid, 0}</code> pool</td></tr>
+            <tr><td><code>ProcessGroupNCCL.allocateTensor()</code></td><td>The request comes from the calling thread, for one <code>at::empty</code>.</td><td>The NCCL pool of the process group</td></tr>
+            <tr><td><code>_cuda_beginAllocateCurrentStreamToPool</code></td><td>The stream is the current stream at entry. Inductor CUDA graph trees use this during warmup.</td><td>The graph tree pool</td></tr>
+            <tr><td><code>_cuda_beginAllocateToPool</code></td><td>Always.</td><td>Any pool</td></tr>
+            <tr><td><code>try_mempool_fallback()</code></td><td>The request comes from the thread that failed. The scope lasts for one cache search.</td><td>Each <code>use_on_oom</code> pool in turn</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Pool lifetime</h3>
+      <figure class="fig">
+        <div class="scroll">
+        <svg viewBox="0 0 980 252" role="img" aria-label="use_count of a MemPool over time. It is 1 after construction, 2 inside use_mem_pool, 1 after exit, 2 while a graph holds it, 1 after graph reset, and 0 after the pool object is deleted. At 0 the pool becomes freeable.">
+          <rect class="bx" x="20" y="20" width="140" height="56" rx="5"/>
+          <text class="tb" x="90" y="43" text-anchor="middle">MemPool()</text>
+          <text class="ts" x="90" y="61" text-anchor="middle">create_or_incref</text>
+          <rect class="acc" x="180" y="20" width="140" height="56" rx="5"/>
+          <text class="tb" x="250" y="43" text-anchor="middle">use_mem_pool()</text>
+          <text class="ts" x="250" y="61" text-anchor="middle">begin scope</text>
+          <rect class="bx" x="340" y="20" width="140" height="56" rx="5"/>
+          <text class="tb" x="410" y="43" text-anchor="middle">context exit</text>
+          <text class="ts" x="410" y="61" text-anchor="middle">end + releasePool</text>
+          <rect class="acc" x="500" y="20" width="140" height="56" rx="5"/>
+          <text class="tb" x="570" y="43" text-anchor="middle">capture(pool=id)</text>
+          <text class="ts" x="570" y="61" text-anchor="middle">graph holds a ref</text>
+          <rect class="bx" x="660" y="20" width="140" height="56" rx="5"/>
+          <text class="tb" x="730" y="43" text-anchor="middle">graph.reset()</text>
+          <text class="ts" x="730" y="61" text-anchor="middle">releasePool</text>
+          <rect class="bx2" x="820" y="20" width="140" height="56" rx="5"/>
+          <text class="tb" x="890" y="43" text-anchor="middle">del pool</text>
+          <text class="ts" x="890" y="61" text-anchor="middle">~MemPool</text>
+          <!-- guides -->
+          <line class="e dash" x1="90" y1="76" x2="90" y2="170"/>
+          <line class="e dash" x1="250" y1="76" x2="250" y2="130"/>
+          <line class="e dash" x1="410" y1="76" x2="410" y2="130"/>
+          <line class="e dash" x1="570" y1="76" x2="570" y2="130"/>
+          <line class="e dash" x1="730" y1="76" x2="730" y2="130"/>
+          <line class="e dash" x1="890" y1="76" x2="890" y2="170"/>
+          <!-- baseline -->
+          <line class="rule" x1="20" y1="210" x2="960" y2="210"/>
+          <text class="ts" x="20" y="205">0</text>
+          <line class="rule" x1="20" y1="170" x2="960" y2="170" stroke-dasharray="2 4"/>
+          <text class="ts" x="20" y="165">1</text>
+          <line class="rule" x1="20" y1="130" x2="960" y2="130" stroke-dasharray="2 4"/>
+          <text class="ts" x="20" y="125">2</text>
+          <polyline class="e a" points="90,170 250,170 250,130 410,130 410,170 570,170 570,130 730,130 730,170 890,170 890,210 960,210"/>
+          <circle cx="90" cy="170" r="3.5" class="mk-a"/>
+          <circle cx="890" cy="210" r="4" class="mk-a"/>
+          <text class="ts" x="98" y="162">use_count</text>
+          <text class="ts ta" x="952" y="232" text-anchor="end">0: pool is freeable; emptyCache(id) frees unused segments</text>
+        </svg>
+        </div>
+        <figcaption><b>Figure 5.</b> The value of <code>use_count</code> during the life of one pool. A routing scope adds one reference. A CUDA graph that captured into the pool adds one reference until <code>reset()</code>. Segments that hold live tensors stay allocated after the count gets to zero. The allocator releases them when those tensors are freed and the cache is emptied.</figcaption>
+      </figure>
+
+      <h3>What you can attach to a pool</h3>
+      <p class="prose">The <code>allocator</code> argument of <code>MemPool</code> sets the source of new segments. The caching logic stays the same. Only <code>allocPrimitive()</code> changes, and the free path calls <code>raw_delete()</code> of the same allocator.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Segment source</th><th>How to make it</th><th>Typical use</th></tr></thead>
+          <tbody>
+            <tr><td>Default (<code>cudaMalloc</code>)</td><td><code>MemPool()</code></td><td>Keep a group of tensors apart from other allocations. Share one pool between CUDA graphs.</td></tr>
+            <tr><td>C functions in a <code>.so</code></td><td><code>CUDAPluggableAllocator(path, alloc, free).allocator()</code></td><td>Managed memory, special mappings, or memory from another library.</td></tr>
+            <tr><td>Python functions</td><td><code>MemPool.from_py_allocator(alloc_fn, free_fn)</code></td><td>Tests and prototypes with <code>cuda.bindings</code>.</td></tr>
+            <tr><td>One locality domain</td><td><code>LocalizedAllocator(domain).allocator()</code></td><td>Put memory on one Green Context locality domain. Needs a CUDA 13.4 or later driver and <code>cuda.bindings</code>.</td></tr>
+            <tr><td>Unified memory</td><td><code>torch.cuda.memory._use_uvm()</code></td><td>Private API. Gives more memory than the GPU has, with page migration.</td></tr>
+            <tr><td><code>ncclMemAlloc</code></td><td><code>MemPool(backend.mem_allocator)</code></td><td>Buffers that NCCL can register for zero-copy collectives.</td></tr>
+            <tr><td>Symmetric memory backend</td><td><code>symm_mem.get_mem_pool(device)</code></td><td>Tensors for <code>torch.ops.symm_mem</code> kernels. See <a href="#distributed">Distributed and symmetric memory</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Rules and limits</h3>
+      <div class="notes">
+        <div class="note caution"><span class="tag">Caution</span><p>Routing from <code>use_mem_pool</code> applies to one thread only. The autograd engine runs backward on other threads. Thus gradients that backward allocates do not go into the pool.</p></div>
+        <div class="note caution"><span class="tag">Caution</span><p>With <code>backend:cudaMallocAsync</code>, a MemPool only counts its users. It does not route allocations. PyTorch shows a warning one time.</p></div>
+        <div class="note caution"><span class="tag">Caution</span><p>A custom allocator that calls Python must not run allocator work on many threads at the same time. The native allocator can hold its mutex while it waits for the GIL. Another thread that holds the GIL and waits for the mutex causes a deadlock.</p></div>
+        <div class="note info"><span class="tag">Note</span><p>The allocator calls the custom free function after it releases its own lock. It keeps the pending frees in a queue until then. This prevents a lock-order deadlock with the callback's own locks.</p></div>
+        <div class="note info"><span class="tag">Note</span><p>A pool with a custom allocator does not use expandable segments, even when <code>expandable_segments:True</code> is set. You cannot restore an expandable segment into such a pool.</p></div>
+        <div class="note info"><span class="tag">Note</span><p>With <code>no_split=True</code>, each allocation uses all of the block that it gets. The symmetric memory pool uses this so that no two tensors share one signal pad.</p></div>
+        <div class="note info"><span class="tag">Note</span><p><code>use_on_oom=True</code> lends only free blocks that are already in the pool. The fallback does not call the pool's allocator for a new segment.</p></div>
+        <div class="note info"><span class="tag">Note</span><p>A MemPool belongs to the device that is current when you make it. Use <code>pool.snapshot()</code> to see only the segments of that pool.</p></div>
+      </div>
+
+      <h3>Examples</h3>
+      <div class="examples">
+        <div class="code">
+          <div class="bar"><span>Route allocations to a pool</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="k">import</span> torch
+
+pool = torch.cuda.MemPool()
+<span class="k">with</span> torch.cuda.use_mem_pool(pool):
+    x = torch.empty(<span class="k">1</span> &lt;&lt; <span class="k">20</span>, device=<span class="k">"cuda"</span>)   <span class="c"># from pool</span>
+y = torch.empty(<span class="k">1</span> &lt;&lt; <span class="k">20</span>, device=<span class="k">"cuda"</span>)       <span class="c"># from default pools</span>
+
+segments = pool.snapshot(include_traces=<span class="k">False</span>)
+<span class="k">del</span> x, pool   <span class="c"># releasePool, then emptyCache(pool id)</span></pre>
+        </div>
+        <div class="two">
+          <div class="code">
+            <div class="bar"><span>alloc.cc — custom segment source</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="c">// g++ -shared -fPIC alloc.cc -o alloc.so \
+//   -I$CUDA_HOME/include -L$CUDA_HOME/lib64 -lcudart</span>
+<span class="k">#include</span> &lt;sys/types.h&gt;
+<span class="k">#include</span> &lt;cuda_runtime_api.h&gt;
+
+<span class="k">extern</span> <span class="k">"C"</span> {
+<span class="k">void*</span> my_alloc(ssize_t size, <span class="k">int</span> device,
+               cudaStream_t stream) {
+  <span class="k">void*</span> p = nullptr;
+  cudaMallocManaged(&amp;p, size);
+  <span class="k">return</span> p;   <span class="c">// nullptr means failure</span>
+}
+<span class="k">void</span> my_free(<span class="k">void*</span> p, size_t size, <span class="k">int</span> device,
+             cudaStream_t stream) {
+  cudaFree(p);
+}
+}</pre>
+          </div>
+          <div class="code">
+            <div class="bar"><span>Attach it to a pool</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="k">from</span> torch.cuda.memory <span class="k">import</span> CUDAPluggableAllocator
+
+alloc = CUDAPluggableAllocator(
+    <span class="k">"./alloc.so"</span>, <span class="k">"my_alloc"</span>, <span class="k">"my_free"</span>)
+
+<span class="c"># Scoped: only this pool uses the .so</span>
+pool = torch.cuda.MemPool(alloc.allocator())
+<span class="k">with</span> torch.cuda.use_mem_pool(pool):
+    w = torch.randn(<span class="k">8192</span>, <span class="k">8192</span>, device=<span class="k">"cuda"</span>)
+
+<span class="c"># Global: replaces the caching allocator.
+# Call before the first CUDA allocation.
+# torch.cuda.memory.change_current_allocator(alloc)</span></pre>
+          </div>
+        </div>
+        <div class="two">
+          <div class="code">
+            <div class="bar"><span>Python callbacks</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="k">from</span> cuda.bindings <span class="k">import</span> runtime <span class="k">as</span> rt
+
+<span class="k">def</span> alloc_fn(size, device, stream):
+    err, ptr = rt.cudaMalloc(size)
+    ok = err == rt.cudaError_t.cudaSuccess
+    <span class="k">return</span> int(ptr) <span class="k">if</span> ok <span class="k">else</span> <span class="k">None</span>
+
+<span class="k">def</span> free_fn(ptr, size, device, stream):
+    rt.cudaFree(ptr)
+
+pool = torch.cuda.MemPool.from_py_allocator(
+    alloc_fn, free_fn, no_split=<span class="k">True</span>)</pre>
+          </div>
+          <div class="code">
+            <div class="bar"><span>Share one pool between graphs</span><button class="copy" type="button">Copy</button></div>
+<pre>g1 = torch.cuda.CUDAGraph()
+g2 = torch.cuda.CUDAGraph()
+pool = torch.cuda.graph_pool_handle()  <span class="c"># {0, uid}</span>
+
+<span class="k">with</span> torch.cuda.graph(g1, pool=pool):
+    out1 = model_a(static_in)
+<span class="k">with</span> torch.cuda.graph(g2, pool=pool):
+    out2 = model_b(out1)
+
+<span class="c"># Replay in capture order only. g2 can
+# reuse memory that g1 freed during capture.</span></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="host">
+      <p class="eyebrow">aten/src/ATen/core/CachingHostAllocator.h</p>
+      <h2>Pinned host memory</h2>
+      <div class="prose stack">
+        <p><code>tensor.pin_memory()</code> and <code>pin_memory=True</code> get page-locked host memory. PyTorch finds the host allocator through <code>at::getHostAllocator(device_type)</code>. CUDA, XPU, and PrivateUse1 backends use one shared template, <code>CachingHostAllocatorImpl</code>. MPS has its own <code>MPSPinnedAllocator</code>.</p>
+      </div>
+      <figure class="fig">
+        <div class="scroll">
+        <svg viewBox="0 0 980 262" role="img" aria-label="pin_memory calls getHostAllocator, which searches size-class free lists. On a miss it calls cudaHostAlloc or malloc plus cudaHostRegister. A non_blocking copy records an event on the block. A freed block waits for its events, then goes back to the free lists.">
+          <text class="lane" x="20" y="24">ALLOCATE</text>
+          <rect class="bx" x="20" y="40" width="170" height="48" rx="5"/>
+          <text class="tb" x="105" y="60" text-anchor="middle">pin_memory()</text>
+          <text class="ts" x="105" y="77" text-anchor="middle">or pin_memory=True</text>
+          <rect class="bx" x="225" y="40" width="210" height="48" rx="5"/>
+          <text class="tb" x="330" y="60" text-anchor="middle">getHostAllocator(kCUDA)</text>
+          <text class="ts" x="330" y="77" text-anchor="middle">REGISTER_HOST_ALLOCATOR</text>
+          <rect class="hst" x="470" y="40" width="200" height="48" rx="5"/>
+          <text class="tb th" x="570" y="60" text-anchor="middle">free lists</text>
+          <text class="ts" x="570" y="77" text-anchor="middle">power-of-two sizes</text>
+          <rect class="bx2" x="720" y="14" width="240" height="44" rx="5"/>
+          <text class="tb" x="840" y="33" text-anchor="middle">cudaHostAlloc</text>
+          <text class="ts" x="840" y="49" text-anchor="middle">default</text>
+          <rect class="bx2" x="720" y="72" width="240" height="44" rx="5"/>
+          <text class="tb" x="840" y="91" text-anchor="middle">malloc + cudaHostRegister</text>
+          <text class="ts" x="840" y="107" text-anchor="middle">pinned_use_cuda_host_register</text>
+          <line class="e" x1="190" y1="64" x2="223" y2="64" marker-end="url(#ah)"/>
+          <line class="e" x1="435" y1="64" x2="468" y2="64" marker-end="url(#ah)"/>
+          <path class="e h" d="M670,58 C694,58 694,36 718,36" marker-end="url(#ah-h)"/>
+          <path class="e h" d="M670,70 C694,70 694,94 718,94" marker-end="url(#ah-h)"/>
+          <text class="ts th" x="695" y="68" text-anchor="middle">miss</text>
+          <text class="lane" x="20" y="156">USE AND FREE</text>
+          <rect class="bx" x="20" y="172" width="170" height="48" rx="5"/>
+          <text class="tb" x="105" y="192" text-anchor="middle">copy_(non_blocking)</text>
+          <text class="ts" x="105" y="209" text-anchor="middle">host to device</text>
+          <rect class="bx" x="225" y="172" width="210" height="48" rx="5"/>
+          <text class="tb" x="330" y="192" text-anchor="middle">record_event(stream)</text>
+          <text class="ts" x="330" y="209" text-anchor="middle">event on the block</text>
+          <rect class="hst" x="470" y="172" width="200" height="48" rx="5"/>
+          <text class="tb th" x="570" y="192" text-anchor="middle">free()</text>
+          <text class="ts" x="570" y="209" text-anchor="middle">wait for events</text>
+          <line class="e" x1="190" y1="196" x2="223" y2="196" marker-end="url(#ah)"/>
+          <line class="e" x1="435" y1="196" x2="468" y2="196" marker-end="url(#ah)"/>
+          <line class="e h" x1="570" y1="172" x2="570" y2="90" marker-end="url(#ah-h)"/>
+          <text class="ts th" x="578" y="136">events done: reuse</text>
+          <text class="ts" x="720" y="190">pinned_use_background_threads:</text>
+          <text class="ts" x="720" y="206">a thread polls events, so free()</text>
+          <text class="ts" x="720" y="222">does not query them</text>
+        </svg>
+        </div>
+        <figcaption><b>Figure 6.</b> The pinned host cache. An asynchronous copy does not stop the block from being freed. The block goes back to the free lists only after the copy event completes. This prevents a new tensor from writing over data that the GPU still reads.</figcaption>
+      </figure>
+      <div class="prose stack">
+        <p><code>cudaHostRegister</code> pins pages of a normal <code>malloc</code> block. Registration of large blocks is slow. Set <code>pinned_num_register_threads</code> to register the pages on many threads. Use <code>torch.cuda.host_memory_stats()</code> to see the counters of this cache.</p>
+      </div>
+    </section>
+
+    <section id="distributed">
+      <p class="eyebrow">torch/csrc/distributed/c10d/symm_mem/ · ProcessGroupNCCL.cpp</p>
+      <h2>Distributed and symmetric memory</h2>
+      <div class="prose stack">
+        <p>Symmetric memory gives each rank a buffer of the same size at a known address. Kernels can then read and write peer buffers directly. Each backend uses a <code>SymmetricMemoryAllocator</code>. Use <code>symm_mem.set_backend()</code> to select <code>"CUDA"</code>, <code>"NVSHMEM"</code>, or <code>"NCCL"</code>.</p>
+        <p>Both distributed paths connect to the caching allocator through a MemPool. Figure 5 shows the two paths.</p>
+      </div>
+      <figure class="fig">
+        <div class="scroll">
+        <svg viewBox="0 0 980 292" role="img" aria-label="Top lane: symm_mem.get_mem_pool creates a MemPool with no_split and without use_on_oom. Its allocator is a CUDAPluggableAllocator that calls the symmetric memory allocator, which uses the CUDA, NVSHMEM or NCCL backend. Bottom lane: the NCCL process group gives an ncclMemAlloc allocator, a user makes a MemPool from it, and register_mem_pool registers its segments with NCCL.">
+          <text class="lane" x="20" y="22">SYMMETRIC MEMORY POOL</text>
+          <rect class="dst" x="20" y="32" width="190" height="52" rx="5"/>
+          <text class="tb td" x="115" y="54" text-anchor="middle">get_mem_pool(dev)</text>
+          <text class="ts" x="115" y="72" text-anchor="middle">symm_mem module</text>
+          <rect class="acc" x="245" y="32" width="180" height="52" rx="5"/>
+          <text class="tb ta" x="335" y="54" text-anchor="middle">MemPool</text>
+          <text class="ts" x="335" y="72" text-anchor="middle">no_split, no use_on_oom</text>
+          <rect class="bx" x="460" y="32" width="220" height="52" rx="5"/>
+          <text class="tb" x="570" y="54" text-anchor="middle">CUDAPluggableAllocator</text>
+          <text class="ts" x="570" y="72" text-anchor="middle">cuda_symm_alloc / free</text>
+          <rect class="dst" x="715" y="32" width="245" height="52" rx="5"/>
+          <text class="tb td" x="837" y="54" text-anchor="middle">SymmetricMemoryAllocator</text>
+          <text class="ts" x="837" y="72" text-anchor="middle">get_allocator(kCUDA)</text>
+          <line class="e" x1="210" y1="58" x2="243" y2="58" marker-end="url(#ah)"/>
+          <line class="e" x1="425" y1="58" x2="458" y2="58" marker-end="url(#ah)"/>
+          <text class="ts" x="442" y="50" text-anchor="middle">uses</text>
+          <line class="e" x1="680" y1="58" x2="713" y2="58" marker-end="url(#ah)"/>
+          <text class="ts" x="697" y="50" text-anchor="middle">calls</text>
+          <rect class="dst" x="715" y="120" width="75" height="34" rx="4"/>
+          <text class="ti" x="752" y="141" text-anchor="middle">CUDA</text>
+          <rect class="dst" x="800" y="120" width="75" height="34" rx="4"/>
+          <text class="ti" x="837" y="141" text-anchor="middle">NVSHMEM</text>
+          <rect class="dst" x="885" y="120" width="75" height="34" rx="4"/>
+          <text class="ti" x="922" y="141" text-anchor="middle">NCCL</text>
+          <line class="e d" x1="837" y1="84" x2="752" y2="118" marker-end="url(#ah-d)"/>
+          <line class="e d" x1="837" y1="84" x2="837" y2="118" marker-end="url(#ah-d)"/>
+          <line class="e d" x1="837" y1="84" x2="922" y2="118" marker-end="url(#ah-d)"/>
+          <text class="ts td" x="700" y="110" text-anchor="end">set_backend()</text>
+          <text class="lane" x="20" y="186">NCCL USER-BUFFER POOL</text>
+          <rect class="bx" x="20" y="196" width="190" height="52" rx="5"/>
+          <text class="tb" x="115" y="218" text-anchor="middle">backend.mem_allocator</text>
+          <text class="ts" x="115" y="236" text-anchor="middle">ncclMemAlloc / ncclMemFree</text>
+          <rect class="acc" x="245" y="196" width="180" height="52" rx="5"/>
+          <text class="tb ta" x="335" y="218" text-anchor="middle">MemPool(allocator)</text>
+          <text class="ts" x="335" y="236" text-anchor="middle">your pool</text>
+          <rect class="bx" x="460" y="196" width="220" height="52" rx="5"/>
+          <text class="tb" x="570" y="218" text-anchor="middle">register_mem_pool()</text>
+          <text class="ts" x="570" y="236" text-anchor="middle">snapshot, then register</text>
+          <rect class="dst" x="715" y="196" width="245" height="52" rx="5"/>
+          <text class="tb td" x="837" y="218" text-anchor="middle">ncclCommRegister</text>
+          <text class="ts" x="837" y="236" text-anchor="middle">or a window when symm=True</text>
+          <line class="e" x1="210" y1="222" x2="243" y2="222" marker-end="url(#ah)"/>
+          <line class="e" x1="425" y1="222" x2="458" y2="222" marker-end="url(#ah)"/>
+          <line class="e" x1="680" y1="222" x2="713" y2="222" marker-end="url(#ah)"/>
+          <text class="ts" x="570" y="272" text-anchor="middle">allocator trace hooks register segments made later</text>
+        </svg>
+        </div>
+        <figcaption><b>Figure 7.</b> Two ways that distributed code uses a MemPool. In the top lane, the pool's allocator is a symmetric memory backend. In the bottom lane, the pool's allocator is <code>ncclMemAlloc</code>, and the process group registers each segment with the communicator.</figcaption>
+      </figure>
+      <div class="examples two">
+        <div class="code">
+          <div class="bar"><span>Symmetric memory pool</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="k">import</span> torch.distributed <span class="k">as</span> dist
+<span class="k">import</span> torch.distributed._symmetric_memory <span class="k">as</span> symm_mem
+
+symm_mem.set_backend(<span class="k">"NCCL"</span>)   <span class="c"># or "CUDA", "NVSHMEM"</span>
+pool = symm_mem.get_mem_pool(<span class="k">"cuda:0"</span>)
+<span class="k">with</span> torch.cuda.use_mem_pool(pool):
+    t = torch.empty(<span class="k">1</span> &lt;&lt; <span class="k">20</span>, device=<span class="k">"cuda:0"</span>)
+
+<span class="c"># All ranks must allocate in the same order.</span>
+symm_mem.rendezvous(t, dist.group.WORLD.group_name)</pre>
+        </div>
+        <div class="code">
+          <div class="bar"><span>NCCL buffer registration</span><button class="copy" type="button">Copy</button></div>
+<pre>pg = dist.group.WORLD
+backend = pg._get_backend(torch.device(<span class="k">"cuda"</span>))
+
+pool = torch.cuda.MemPool(backend.mem_allocator)
+<span class="k">with</span> torch.cuda.use_mem_pool(pool):
+    buf = torch.empty(<span class="k">1</span> &lt;&lt; <span class="k">26</span>, device=<span class="k">"cuda"</span>)
+
+backend.register_mem_pool(pool)   <span class="c"># symm=True for windows</span>
+dist.all_reduce(buf)
+backend.deregister_mem_pool(pool)</pre>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="note info"><span class="tag">Note</span><p>The symmetric pool sets <code>use_on_oom=False</code>. If the pool lent blocks to normal allocations, ranks could get different allocation states. It sets <code>no_split=True</code> because each segment has one signal pad.</p></div>
+        <div class="note caution"><span class="tag">Caution</span><p>Make the NCCL communicator before you call <code>register_mem_pool()</code>. Pass <code>device_id</code> to <code>init_process_group</code> for eager initialization.</p></div>
+        <div class="note info"><span class="tag">Note</span><p><code>TORCH_NCCL_USE_TENSOR_REGISTER_ALLOCATOR_HOOK=1</code> registers every segment of the caching allocator with NCCL, not only the segments of one pool. It is not compatible with expandable segments. PyTorch disables it when expandable segments are on.</p></div>
+      </div>
+    </section>
+
+    <section id="config">
+      <p class="eyebrow">c10/core/AllocatorConfig.cpp · c10/cuda/CUDAAllocatorConfig.cpp</p>
+      <h2>Configuration keys</h2>
+      <div class="prose stack">
+        <p>Set keys in <code>PYTORCH_ALLOC_CONF</code> as <code>key:value</code> pairs with commas between them. <code>PYTORCH_CUDA_ALLOC_CONF</code> still works but is the old name. To change some keys at run time, use <code>torch.cuda.memory._set_allocator_settings()</code>.</p>
+      </div>
+      <div class="code">
+        <div class="bar"><span>Example</span><button class="copy" type="button">Copy</button></div>
+<pre>PYTORCH_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.8,pinned_use_background_threads:True</pre>
+      </div>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Key</th><th>Scope</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>backend</code></td><td class="scope">CUDA</td><td><code>native</code> (default) or <code>cudaMallocAsync</code>.</td></tr>
+            <tr><td><code>max_split_size_mb</code></td><td class="scope">all devices</td><td>The allocator does not split cached blocks larger than this size.</td></tr>
+            <tr><td><code>max_non_split_rounding_mb</code></td><td class="scope">all devices</td><td>A request can use a larger block that cannot be split, if the extra size is less than this value.</td></tr>
+            <tr><td><code>roundup_power2_divisions</code></td><td class="scope">all devices</td><td>Rounds request sizes to fractions of a power of two. Can be one value or a list for each size range.</td></tr>
+            <tr><td><code>garbage_collection_threshold</code></td><td class="scope">all devices</td><td>When usage goes above this fraction, the allocator frees cached blocks that were used least recently.</td></tr>
+            <tr><td><code>expandable_segments</code></td><td class="scope">all devices</td><td>Use one growing virtual range for each stream.</td></tr>
+            <tr><td><code>large_segment_size_mb</code></td><td class="scope">all devices</td><td>Segment size for requests from 1 MB to 10 MB. The default is 20 MB.</td></tr>
+            <tr><td><code>expandable_segments_reserve</code>, <code>…_reserve_by_class</code></td><td class="scope">CUDA native</td><td>Size of the virtual range to reserve for each stream, or for each class of stream.</td></tr>
+            <tr><td><code>per_process_memory_fraction</code></td><td class="scope">CUDA native</td><td>Limits this process to a fraction of device memory.</td></tr>
+            <tr><td><code>release_lock_on_cudamalloc</code></td><td class="scope">CUDA native</td><td>Releases the allocator lock during <code>cudaMalloc</code>.</td></tr>
+            <tr><td><code>throw_on_cudamalloc_oom</code></td><td class="scope">CUDA native</td><td>Raises the OOM error before <code>cudaMalloc</code> when the request will probably not fit. The error message is then clearer.</td></tr>
+            <tr><td><code>graph_capture_record_stream_reuse</code></td><td class="scope">CUDA native</td><td>During capture, a block that other streams used can go back to the pool before capture ends. The allocator puts free markers in the graph for this. When off, such blocks wait until capture ends.</td></tr>
+            <tr><td><code>pinned_use_cuda_host_register</code></td><td class="scope">pinned, CUDA</td><td>Uses <code>malloc</code> + <code>cudaHostRegister</code> instead of <code>cudaHostAlloc</code>.</td></tr>
+            <tr><td><code>pinned_num_register_threads</code></td><td class="scope">pinned, CUDA</td><td>Number of threads that register pages.</td></tr>
+            <tr><td><code>pinned_reserve_segment_size_mb</code></td><td class="scope">pinned, CUDA</td><td>Allocates one pinned segment of this size on first use. Later requests take memory from it before they call the slow path.</td></tr>
+            <tr><td><code>pinned_free_catch_all</code></td><td class="scope">pinned, CUDA</td><td>If <code>free()</code> raises an exception, the allocator logs a warning and continues. This prevents <code>std::terminate</code> from a destructor during shutdown.</td></tr>
+            <tr><td><code>pinned_use_background_threads</code></td><td class="scope">pinned</td><td>A background thread processes copy events.</td></tr>
+            <tr><td><code>pinned_max_round_threshold_mb</code></td><td class="scope">pinned</td><td>Above this size, requests are not rounded to a power of two.</td></tr>
+            <tr><td><code>pinned_max_cached_size_mb</code></td><td class="scope">pinned</td><td>Limit for total cached pinned memory.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose stack">
+        <p>Other switches: <code>PYTORCH_NO_CUDA_MEMORY_CACHING=1</code> stops the CUDA cache. Each request then calls <code>cudaMalloc</code> and <code>cudaFree</code>. <code>THP_MEM_ALLOC_ENABLE=1</code> requests huge pages for large CPU blocks. <code>PYTORCH_MPS_HIGH_WATERMARK_RATIO</code> and <code>PYTORCH_MPS_LOW_WATERMARK_RATIO</code> set the MPS limits.</p>
+      </div>
+    </section>
+
+    <section id="sources">
+      <p class="eyebrow">Read the code</p>
+      <h2>Source files</h2>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>c10/core/Allocator.h</code></td><td><code>Allocator</code>, <code>DataPtr</code>, <code>SetAllocator</code>, <code>REGISTER_ALLOCATOR</code></td></tr>
+            <tr><td><code>c10/core/CachingDeviceAllocator.h</code></td><td><code>DeviceAllocator</code> and shared device stats</td></tr>
+            <tr><td><code>c10/core/AllocatorConfig.{h,cpp}</code></td><td>Size constants and keys for all devices</td></tr>
+            <tr><td><code>c10/core/CPUAllocator.cpp</code>, <code>impl/alloc_cpu.cpp</code></td><td>Default and mobile CPU allocators, alignment, huge pages</td></tr>
+            <tr><td><code>c10/mobile/</code></td><td><code>CPUCachingAllocator</code>, <code>CPUProfilingAllocator</code></td></tr>
+            <tr><td><code>aten/src/ATen/MapAllocator.h</code></td><td>File and shared-memory storage</td></tr>
+            <tr><td><code>c10/cuda/CUDACachingAllocator.cpp</code></td><td>Native caching allocator, <code>PrivatePool</code>, routing scopes, OOM steps</td></tr>
+            <tr><td><code>c10/cuda/CUDAMallocAsyncAllocator.cpp</code></td><td><code>cudaMallocAsync</code> backend</td></tr>
+            <tr><td><code>c10/cuda/CUDAAllocatorConfig.cpp</code></td><td>CUDA-only keys</td></tr>
+            <tr><td><code>aten/src/ATen/cuda/MemPool.cpp</code></td><td><code>MemPool</code> ids and lifetime</td></tr>
+            <tr><td><code>aten/src/ATen/cuda/CUDAGraph.cpp</code></td><td>Capture filters and graph pools</td></tr>
+            <tr><td><code>torch/csrc/cuda/CUDAPluggableAllocator.h</code></td><td>C function and Python callback allocators</td></tr>
+            <tr><td><code>torch/cuda/memory.py</code></td><td><code>MemPool</code>, <code>use_mem_pool</code>, <code>LocalizedAllocator</code>, <code>_use_uvm</code></td></tr>
+            <tr><td><code>aten/src/ATen/core/CachingHostAllocator.h</code></td><td>Pinned host template</td></tr>
+            <tr><td><code>aten/src/ATen/cuda/CachingHostAllocator.cpp</code></td><td>CUDA pinned host allocator</td></tr>
+            <tr><td><code>aten/src/ATen/mps/MPSAllocator.{h,mm}</code></td><td>MPS heap, shared, and pinned allocators</td></tr>
+            <tr><td><code>c10/xpu/XPUCachingAllocator.cpp</code></td><td>XPU caching allocator</td></tr>
+            <tr><td><code>torch/csrc/distributed/c10d/symm_mem/</code></td><td>Symmetric memory backends and <code>cuda_mem_pool.cpp</code></td></tr>
+            <tr><td><code>torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp</code></td><td><code>ncclMemAlloc</code> pool and buffer registration</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>Made from the PyTorch source at commit 9664c41 on the main branch, 18 October 2026. Names and keys can change in later commits. Private APIs start with an underscore and can change without notice.</footer>
+  </main>
+</div>
+
+<script>
+(function () {
+  var groups = [
+    { id: "all", label: "All" },
+    { id: "cpu", label: "CPU" },
+    { id: "cuda", label: "CUDA device" },
+    { id: "host", label: "Pinned host" },
+    { id: "mps", label: "MPS" },
+    { id: "xpu", label: "XPU" },
+    { id: "dist", label: "Distributed" },
+    { id: "other", label: "Other" }
+  ];
+  var A = [
+    { g: "cpu", k: "cpu", n: "DefaultCPUAllocator", src: "c10/core/CPUAllocator.cpp", by: "posix_memalign, 64-byte alignment (_aligned_malloc on Windows)", cache: "None. The system malloc does the caching.", use: "Default for kCPU.",
+      p: "Preload jemalloc or tcmalloc to change the caching behavior. Set THP_MEM_ALLOC_ENABLE=1 to align large blocks to 2 MB and request transparent huge pages." },
+    { g: "cpu", k: "cpu", n: "DefaultMobileCPUAllocator", src: "c10/core/CPUAllocator.cpp", by: "malloc with guard padding", cache: "Optional, through the two allocators below", use: "C10_MOBILE builds.",
+      p: "In a WithCPUCachingAllocatorGuard scope, it sends calls to CPUCachingAllocator. In a WithProfilingAllocatorGuard scope, it sends calls to CPUProfilingAllocator." },
+    { g: "cpu", k: "cpu", n: "CPUCachingAllocator", src: "c10/mobile/CPUCachingAllocator.h", by: "malloc", cache: "Free lists keyed by size", use: "WithCPUCachingAllocatorGuard",
+      p: "Mobile only. It keeps freed blocks for the life of the guard scope." },
+    { g: "cpu", k: "cpu", n: "CPUProfilingAllocator", src: "c10/mobile/CPUProfilingAllocator.h", by: "One arena", cache: "Plan replay", use: "WithProfileAllocationsGuard, then WithProfilingAllocatorGuard",
+      p: "Mobile only. The first run records an AllocationPlan. Later runs place each tensor at a fixed offset in one arena." },
+    { g: "cpu", k: "cpu", n: "MapAllocator / RefcountedMapAllocator", src: "aten/src/ATen/MapAllocator.h", by: "mmap of a file, shm_open, or a file descriptor", cache: "None", use: "UntypedStorage.from_file, torch.load(mmap=True), torch.multiprocessing",
+      p: "The refcounted type keeps a reference count in a header inside the shared segment. The last process that releases it removes the segment." },
+    { g: "cuda", k: "dev", n: "CUDA caching allocator", src: "c10/cuda/CUDACachingAllocator.cpp", by: "cudaMalloc, or cuMemCreate + cuMemMap for expandable segments", cache: "Yes. Small and large pools for each device, keyed by stream", use: "backend:native (default)",
+      p: "NativeCachingAllocator holds one DeviceCachingAllocator for each GPU. It supplies memory snapshots, history traces, graph pools, and MemPools. See Inside the CUDA caching allocator and Blocks and segments." },
+    { g: "cuda", k: "dev", n: "CudaMallocAsyncAllocator", src: "c10/cuda/CUDAMallocAsyncAllocator.cpp", by: "cudaMallocAsync on the device cudaMemPool", cache: "The driver pool does the caching", use: "backend:cudaMallocAsync",
+      p: "PyTorch does not split blocks on this backend. Snapshots and history are not available. A MemPool only counts its users and does not route allocations." },
+    { g: "cuda", k: "dev", n: "CUDAPluggableAllocator", src: "torch/csrc/cuda/CUDAPluggableAllocator.h", by: "Your alloc and free C functions from a .so", cache: "Your choice. Inside a MemPool, the caching allocator caches it", use: "change_current_allocator(), or MemPool(alloc.allocator())",
+      p: "Signatures: void* alloc(ssize_t size, int device, cudaStream_t s) and void free(void* p, size_t size, int device, cudaStream_t s). Optional hooks set init, reset, memory fraction, and record_stream." },
+    { g: "cuda", k: "dev", n: "Python callback allocator", src: "torch/cuda/memory.py", by: "alloc_fn(size, device, stream) and free_fn(ptr, size, device, stream)", cache: "Through the MemPool", use: "MemPool.from_py_allocator()",
+      p: "alloc_fn returns an integer address, or None or 0 for failure. The stream argument is the raw stream address." },
+    { g: "cuda", k: "dev", n: "LocalizedAllocator", src: "torch/cuda/memory.py", by: "Physical memory on one Green Context locality domain", cache: "Through the MemPool", use: "MemPool(allocator=LocalizedAllocator(d).allocator())",
+      p: "Needs a CUDA 13.4 or later driver, cuda.bindings 13.4 or later, and a GPU with more than one locality domain. It does not move kernel execution to the domain. Use it on one thread at a time." },
+    { g: "cuda", k: "dev", n: "UVM pool (private)", src: "torch/cuda/memory.py", by: "cudaMallocManaged + cudaMemAdvise through cuda-python", cache: "Through a Python callback MemPool", use: "with torch.cuda.memory._use_uvm():",
+      p: "Gives more memory than the GPU has. Pages move between host and device on demand. Results do not change. Only speed changes." },
+    { g: "cuda", k: "dev", n: "CUDA graph private pool", src: "aten/src/ATen/cuda/CUDAGraph.cpp", by: "The caching allocator", cache: "Yes, a PrivatePool", use: "torch.cuda.graph(g, pool=...), graph_pool_handle()",
+      p: "A capture without a pool gets a new {uuid, 0} pool. Graphs that share a pool must replay in capture order." },
+    { g: "cuda", k: "dev", n: "ThrustAllocator", src: "aten/src/ATen/cuda/ThrustAllocator.h", by: "The caching allocator", cache: "Yes", use: "Internal. Thrust and CUB temporary storage.",
+      p: "Thrust temporary buffers come from the PyTorch cache, so they appear in memory stats." },
+    { g: "cuda", k: "dev", n: "HIPAllocatorMasqueradingAsCUDA", src: "aten/src/ATen/hip/impl/", by: "hipMalloc through the hipified caching allocator", cache: "Yes", use: "ROCm builds",
+      p: "The same allocator code after hipify. It registers so that code which asks for a CUDA device gets the HIP allocator." },
+    { g: "host", k: "host", n: "CachingHostAllocatorImpl", src: "aten/src/ATen/core/CachingHostAllocator.h", by: "A backend-specific function", cache: "Power-of-two free lists with events", use: "REGISTER_HOST_ALLOCATOR(device_type, alloc)",
+      p: "One template for all pinned host caches. A PrivateUse1 backend can implement it and register it." },
+    { g: "host", k: "host", n: "CUDA CachingHostAllocator", src: "aten/src/ATen/cuda/CachingHostAllocator.cpp", by: "cudaHostAlloc, or malloc + cudaHostRegister", cache: "Yes", use: "pin_memory(), pin_memory=True",
+      p: "Use torch.cuda.host_memory_stats() for counters. See Configuration keys for its settings." },
+    { g: "host", k: "host", n: "XPU CachingHostAllocator", src: "aten/src/ATen/xpu/CachingHostAllocator.cpp", by: "SYCL host allocation", cache: "Yes", use: "pin_memory() for XPU",
+      p: "The same template as CUDA." },
+    { g: "host", k: "host", n: "MPSPinnedAllocator", src: "aten/src/ATen/mps/MPSAllocator.mm", by: "Shared-storage MTLBuffer", cache: "Through the MPS heap allocator", use: "pin_memory() on Apple silicon",
+      p: "Apple silicon has unified memory. The pinned buffer is a buffer that the CPU and GPU both see." },
+    { g: "mps", k: "dev", n: "MPSHeapAllocatorImpl", src: "aten/src/ATen/mps/MPSAllocator.{h,mm}", by: "MTLHeap, then MTLBuffer from the heap", cache: "Yes. Heap tiers SMALL, LARGE, XLARGE, OVERSIZE", use: "Default for kMPS",
+      p: "It has a private-storage allocator and a shared-storage allocator. Buffer pools are separate for private, shared, and scalar buffers. The watermark ratios set when it frees memory and when it fails." },
+    { g: "xpu", k: "dev", n: "XPU caching allocator", src: "c10/xpu/XPUCachingAllocator.cpp", by: "sycl::malloc_device, or virtual memory mapping for expandable segments", cache: "Yes, same design as CUDA", use: "Default for kXPU",
+      p: "It supports expandable segments, graph pools, and torch.xpu.MemPool. Use torch.xpu.memory for stats and empty_cache." },
+    { g: "dist", k: "dist", n: "CUDASymmetricMemoryAllocator", src: "c10d/symm_mem/CUDASymmetricMemory.hpp", by: "CUDA virtual memory, IPC handle exchange, multicast", cache: "Through the symmetric MemPool", use: "symm_mem.set_backend(\"CUDA\")",
+      p: "rendezvous() exchanges handles and maps peer buffers into each rank. Multicast needs NVSwitch support." },
+    { g: "dist", k: "dist", n: "NVSHMEMSymmetricMemoryAllocator", src: "c10d/symm_mem/NVSHMEMSymmetricMemory.cpp", by: "nvshmem_malloc", cache: "Through the symmetric MemPool", use: "symm_mem.set_backend(\"NVSHMEM\")",
+      p: "Allocations come from the NVSHMEM symmetric heap. All ranks must allocate in the same order." },
+    { g: "dist", k: "dist", n: "NCCLSymmetricMemoryAllocator", src: "c10d/symm_mem/NCCLSymmetricMemory.cu", by: "ncclMemAlloc + ncclCommWindowRegister", cache: "Through the symmetric MemPool", use: "symm_mem.set_backend(\"NCCL\")",
+      p: "Registers each buffer as an NCCL window, so NCCL symmetric kernels can use it." },
+    { g: "dist", k: "dist", n: "ProcessGroupNCCL mem allocator", src: "torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp", by: "ncclMemAlloc through CUDAPluggableAllocator", cache: "Through a MemPool", use: "MemPool(backend.mem_allocator), register_mem_pool()",
+      p: "Registered buffers let NCCL use zero-copy and NVLink SHARP algorithms. See Distributed and symmetric memory." },
+    { g: "other", k: "cpu", n: "MetaAllocator", src: "aten/src/ATen/EmptyTensor.cpp", by: "Nothing", cache: "None", use: "device=\"meta\"",
+      p: "Meta tensors have shapes and strides but no memory." },
+    { g: "other", k: "cpu", n: "ZeroTensorAllocator", src: "aten/src/ATen/native/TensorFactories.h", by: "Nothing", cache: "None", use: "torch._efficientzerotensor",
+      p: "Gives tensors that read as zero and use no memory." },
+    { g: "other", k: "cpu", n: "Vulkan and QNNPACK allocators", src: "aten/src/ATen/native/vulkan/, qnnpack/", by: "Vulkan Memory Allocator; aligned malloc", cache: "Backend-specific", use: "Mobile and Vulkan builds",
+      p: "These allocators serve only their own backend kernels." },
+    { g: "other", k: "dev", n: "PrivateUse1 backends", src: "Out of tree (for example, the OpenReg test backend)", by: "The backend's own driver", cache: "Backend-specific", use: "SetAllocator(kPrivateUse1, ...)",
+      p: "An out-of-tree device implements DeviceAllocator and, if it has pinned memory, HostAllocator. It registers both with the same macros." }
+  ];
+
+  var chips = document.getElementById("chips");
+  var cards = document.getElementById("cards");
+  var current = "all";
+  try { var s = localStorage.getItem("alloc-filter"); if (s) current = s; } catch (e) {}
+
+  function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  var gname = {}; groups.forEach(function (g) { gname[g.id] = g.label; });
+
+  function renderChips() {
+    chips.innerHTML = "";
+    groups.forEach(function (g) {
+      var n = g.id === "all" ? A.length : A.filter(function (a) { return a.g === g.id; }).length;
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.id = "chip-" + g.id;
+      b.setAttribute("aria-pressed", String(g.id === current));
+      b.innerHTML = esc(g.label) + '<span class="n">' + n + "</span>";
+      b.addEventListener("click", function () {
+        current = g.id;
+        try { localStorage.setItem("alloc-filter", current); } catch (e) {}
+        renderChips(); renderCards();
+      });
+      chips.appendChild(b);
+    });
+  }
+  function renderCards() {
+    cards.innerHTML = A.filter(function (a) { return current === "all" || a.g === current; }).map(function (a) {
+      return '<article class="card" data-kind="' + a.k + '">' +
+        '<div class="grp">' + esc(gname[a.g]) + "</div>" +
+        "<h4>" + esc(a.n) + "</h4>" +
+        "<dl><dt>Source</dt><dd><code>" + esc(a.src) + "</code></dd>" +
+        "<dt>Memory from</dt><dd>" + esc(a.by) + "</dd>" +
+        "<dt>Cache</dt><dd>" + esc(a.cache) + "</dd>" +
+        "<dt>Select</dt><dd><code>" + esc(a.use) + "</code></dd></dl>" +
+        "<p>" + esc(a.p) + "</p></article>";
+    }).join("");
+  }
+  if (!groups.some(function (g) { return g.id === current; })) current = "all";
+  renderChips(); renderCards();
+
+  document.querySelectorAll(".code").forEach(function (box) {
+    var btn = box.querySelector(".copy"); var pre = box.querySelector("pre");
+    if (!btn || !pre) return;
+    btn.addEventListener("click", function () {
+      var text = pre.innerText;
+      function done(msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = "Copy"; }, 1500); }
+      function fallback() {
+        var r = document.createRange(); r.selectNodeContents(pre);
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        done("Selected");
+      }
+      try {
+        navigator.clipboard.writeText(text).then(function () { done("Copied"); }, fallback);
+      } catch (e) { fallback(); }
+    });
+  });
+})();
+</script>
+<script>
+// Replays CUDACachingAllocator rules (c10/cuda/CUDACachingAllocator.cpp, defaults:
+// max_split_size = unlimited, no roundup_power2_divisions, expandable_segments off, one stream).
+var CCA = (function () {
+  var KiB = 1024, MiB = 1024 * 1024;
+  var kMinBlockSize = 512, kSmallSize = MiB, kSmallBuffer = 2 * MiB,
+      kMinLargeAlloc = 10 * MiB, kRoundLarge = 2 * MiB, kLargeSegment = 20 * MiB;
+
+  function roundSize(n) { return n < kMinBlockSize ? kMinBlockSize : kMinBlockSize * Math.ceil(n / kMinBlockSize); }
+  function allocationSize(n) {
+    if (n <= kSmallSize) return kSmallBuffer;
+    if (n < kMinLargeAlloc) return kLargeSegment;
+    return kRoundLarge * Math.ceil(n / kRoundLarge);
+  }
+  function fmt(n) {
+    if (n >= MiB && n % (MiB / 8) === 0) return +(n / MiB).toFixed(3) + " MiB";
+    if (n >= KiB && n % KiB === 0) return n / KiB + " KiB";
+    return n.toLocaleString("en-US") + " B";
+  }
+  function bytes(n) { return n.toLocaleString("en-US") + " B"; }
+
+  function Sim() { this.segs = []; this.nextId = 1; this.mallocs = 0; this.frees = 0; }
+  Sim.prototype.clone = function () {
+    var s = new Sim(); s.nextId = this.nextId; s.mallocs = this.mallocs; s.frees = this.frees;
+    s.segs = this.segs.map(function (g) {
+      return { id: g.id, pool: g.pool, size: g.size, blocks: g.blocks.map(function (b) { return Object.assign({}, b); }) };
+    });
+    return s;
+  };
+  Sim.prototype.stats = function () {
+    var r = 0, a = 0, split = 0;
+    this.segs.forEach(function (g) {
+      r += g.size;
+      g.blocks.forEach(function (b) { if (b.alloc) a += b.size; else if (g.blocks.length > 1) split += b.size; });
+    });
+    return { reserved: r, allocated: a, inactiveSplit: split, cached: r - a, mallocs: this.mallocs, frees: this.frees };
+  };
+  Sim.prototype.malloc = function (label, kind, req) {
+    var size = roundSize(req);
+    var pool = size <= kSmallSize ? "small" : "large";
+    var notes = [];
+    notes.push("Request " + bytes(req) + ". Rounded size " + bytes(size) + ".");
+    notes.push(pool === "small"
+      ? "The size is 1 MiB or less, so the small pool supplies the block."
+      : "The size is more than 1 MiB, so the large pool supplies the block.");
+    // best fit: lowest (size, segment order, address) among free blocks of this pool and stream
+    var best = null;
+    this.segs.forEach(function (g) {
+      if (g.pool !== pool) return;
+      g.blocks.forEach(function (b, i) {
+        if (b.alloc || b.size < size) return;
+        if (!best || b.size < best.b.size) best = { g: g, b: b, i: i };
+      });
+    });
+    var created = false;
+    if (!best) {
+      var segSize = allocationSize(size);
+      var g = { id: this.nextId++, pool: pool, size: segSize, blocks: [{ off: 0, size: segSize, alloc: false }] };
+      this.segs.push(g); this.mallocs++; created = true;
+      best = { g: g, b: g.blocks[0], i: 0 };
+      var why = size <= kSmallSize ? "requests of 1 MiB or less get a 2 MiB segment"
+        : size < kMinLargeAlloc ? "requests from 1 MiB to 10 MiB get a 20 MiB segment"
+        : "requests of 10 MiB or more get a segment rounded up to 2 MiB";
+      notes.push("No free block in the " + pool + " pool is large enough. cudaMalloc makes segment S" + g.id + " of " + fmt(segSize) + " (" + why + ").");
+    } else {
+      notes.push("Best fit: the smallest free block that is large enough is " + fmt(best.b.size) + " in segment S" + best.g.id + ". No driver call.");
+    }
+    var rem = best.b.size - size;
+    var split = pool === "small" ? rem >= kMinBlockSize : rem > kSmallSize;
+    var blk = best.b;
+    if (split) {
+      var tail = { off: blk.off + size, size: rem, alloc: false };
+      blk.size = size;
+      best.g.blocks.splice(best.i + 1, 0, tail);
+      notes.push(pool === "small"
+        ? "Split: the remainder " + fmt(rem) + " is 512 B or more. It stays in the pool as a free block."
+        : "Split: the remainder " + fmt(rem) + " is more than 1 MiB. It stays in the pool as a free block.");
+    } else if (rem > 0) {
+      notes.push("No split: the remainder " + fmt(rem) + " is too small. The block keeps its full size.");
+    } else {
+      notes.push("No split: the block is exactly the rounded size.");
+    }
+    blk.alloc = true; blk.label = label; blk.kind = kind; blk.req = req;
+    return { type: "alloc", seg: best.g.id, off: blk.off, label: label, created: created, split: split, notes: notes };
+  };
+  Sim.prototype.free = function (label) {
+    var notes = [];
+    for (var gi = 0; gi < this.segs.length; gi++) {
+      var g = this.segs[gi];
+      for (var i = 0; i < g.blocks.length; i++) {
+        var b = g.blocks[i];
+        if (!(b.alloc && b.label === label)) continue;
+        b.alloc = false; delete b.label; delete b.kind; delete b.req;
+        notes.push("The block of " + fmt(b.size) + " goes back to the " + g.pool + " pool. The segment stays reserved.");
+        var merged = [];
+        var next = g.blocks[i + 1];
+        if (next && !next.alloc) { b.size += next.size; g.blocks.splice(i + 1, 1); merged.push("the next block (" + fmt(next.size) + ")"); }
+        var prev = g.blocks[i - 1];
+        if (prev && !prev.alloc) { prev.size += b.size; g.blocks.splice(i, 1); merged.push("the previous block (" + fmt(prev.size - b.size) + ")"); b = prev; }
+        if (merged.length) notes.push("Merge: the block joins " + merged.join(" and ") + ". The free block is now " + fmt(b.size) + ".");
+        else notes.push("No merge: the blocks on each side are in use.");
+        if (g.blocks.length === 1) notes.push("All of segment S" + g.id + " is free again. It is one block with no split.");
+        return { type: "free", seg: g.id, off: b.off, label: label, notes: notes };
+      }
+    }
+    throw new Error("no block " + label);
+  };
+  Sim.prototype.emptyCache = function () {
+    var kept = [], released = [];
+    var self = this;
+    this.segs = this.segs.filter(function (g) {
+      if (g.blocks.length === 1 && !g.blocks[0].alloc) { released.push(g); self.frees++; return false; }
+      kept.push(g); return true;
+    });
+    var notes = ["empty_cache() calls cudaFree only for a segment that is one free block with no split."];
+    if (released.length) notes.push("Released: " + released.map(function (g) { return "S" + g.id + " (" + fmt(g.size) + ")"; }).join(", ") + ".");
+    else notes.push("Released: nothing.");
+    kept.forEach(function (g) {
+      var live = g.blocks.filter(function (b) { return b.alloc; }).map(function (b) { return b.label; });
+      notes.push("S" + g.id + " stays: it holds " + live.join(", ") + ".");
+    });
+    return { type: "empty", notes: notes };
+  };
+
+  function run(steps) {
+    var sim = new Sim(); var out = [];
+    steps.forEach(function (st) {
+      var ev;
+      if (st.op === "alloc") ev = sim.malloc(st.label, st.kind, st.bytes);
+      else if (st.op === "free") ev = sim.free(st.label);
+      else ev = sim.emptyCache();
+      out.push({ step: st, ev: ev, state: sim.clone(), stats: sim.stats() });
+    });
+    return out;
+  }
+  return { run: run, fmt: fmt, bytes: bytes, MiB: MiB };
+})();
+
+var LINEAR_STEPS = [
+  { line: 0, op: "alloc", label: "weight", kind: "param", bytes: 4096 * 2048 * 4,
+    title: "Allocate the weight", text: "nn.Linear makes the weight with torch.empty((4096, 2048)). The tensor uses 4096 × 2048 × 4 bytes." },
+  { line: 0, op: "alloc", label: "bias", kind: "param", bytes: 4096 * 4,
+    title: "Allocate the bias", text: "nn.Linear makes the bias with torch.empty(4096). The tensor uses 16 KiB." },
+  { line: 1, op: "alloc", label: "x", kind: "act", bytes: 256 * 2048 * 4,
+    title: "Allocate the input", text: "torch.randn makes the input batch. The tensor uses 256 × 2048 × 4 bytes." },
+  { line: 2, op: "alloc", label: "y", kind: "act", bytes: 256 * 4096 * 4,
+    title: "Allocate the output", text: "F.linear calls addmm(bias, x, weight.t()). addmm allocates its output before it starts the matrix multiply." },
+  { line: 2, op: "alloc", label: "cuBLAS ws", kind: "ws", bytes: 4096 * 1024 * 2 + 16 * 1024 * 8,
+    title: "Allocate the cuBLAS workspace", text: "The first matrix multiply on this stream gets a cuBLAS workspace from the caching allocator. On Ampere and Ada GPUs, the default size is 8 MiB + 128 KiB. PyTorch keeps the workspace for the life of the cuBLAS handle." },
+  { line: 3, op: "alloc", label: "dy", kind: "act", bytes: 256 * 4096 * 4,
+    title: "Allocate the output gradient", text: "torch.randn_like(y) makes a gradient with the same size as y." },
+  { line: 4, op: "alloc", label: "weight.grad", kind: "grad", bytes: 4096 * 2048 * 4,
+    title: "Allocate the weight gradient", text: "AddmmBackward0 calls mm_mat2_backward. Because weight.t() is column-major, it computes dy.t() @ x. The result has the shape and layout of the weight. AccumulateGrad keeps this tensor as weight.grad and does not copy it." },
+  { line: 4, op: "alloc", label: "bias.grad", kind: "grad", bytes: 4096 * 4,
+    title: "Allocate the bias gradient", text: "The gradient for the bias input of addmm has the shape of y. The autograd engine reduces it to the bias shape with sum_to. This allocates 16 KiB. AccumulateGrad keeps it as bias.grad." },
+  { line: 5, op: "free", label: "y",
+    title: "Free the output", text: "del y removes the last reference to the output. The deleter returns the block to the allocator." },
+  { line: 6, op: "free", label: "dy",
+    title: "Free the output gradient", text: "del dy frees the gradient block." },
+  { line: 7, op: "free", label: "x",
+    title: "Free the input", text: "del x frees the input block. Autograd released its saved reference to x at the end of backward." },
+  { line: 8, op: "empty",
+    title: "Empty the cache", text: "torch.cuda.empty_cache() tries to return cached memory to the driver." },
+  { line: 9, op: "alloc", label: "x", kind: "act", bytes: 256 * 2048 * 4,
+    title: "Next iteration: allocate the input", text: "The next batch needs a new input tensor of the same size." }
+];
+
+if (typeof module !== "undefined") module.exports = { CCA: CCA, LINEAR_STEPS: LINEAR_STEPS };
+
+</script>
+<script>
+(function () {
+  var root = document.getElementById("walk");
+  if (!root || typeof CCA === "undefined") return;
+  var R = CCA.run(LINEAR_STEPS);
+  var N = R.length;
+  var MiB = CCA.MiB;
+  var LINES = [
+    'layer = nn.Linear(2048, 4096, device="cuda")',
+    'x = torch.randn(256, 2048, device="cuda")',
+    'y = layer(x)',
+    'dy = torch.randn_like(y)',
+    'y.backward(dy)',
+    'del y',
+    'del dy',
+    'del x',
+    'torch.cuda.empty_cache()',
+    'x = torch.randn(256, 2048, device="cuda")  # next iteration'
+  ];
+  var $ = function (id) { return document.getElementById(id); };
+  var linesEl = $("walk-lines"), segsEl = $("walk-segs"), statsEl = $("walk-stats");
+  var range = $("walk-range"), prev = $("walk-prev"), next = $("walk-next");
+  range.max = String(N);
+  var cur = 0;
+
+  function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function mib(n) { return (n / MiB).toFixed(2) + " MiB"; }
+
+  LINES.forEach(function (t, i) {
+    var li = document.createElement("li");
+    var b = document.createElement("button");
+    b.type = "button"; b.id = "walk-line-" + i;
+    b.innerHTML = '<span class="ln">' + (i + 1) + "</span><code>" + esc(t) + "</code>";
+    b.addEventListener("click", function () {
+      for (var k = 0; k < N; k++) if (R[k].step.line === i) { go(k); return; }
+    });
+    li.appendChild(b); linesEl.appendChild(li);
+  });
+
+  function statTile(k, v, d, cls) {
+    return '<div class="stat"><span class="k">' + k + '</span><span class="v">' + v + '</span><span class="d ' + (cls || "") + '">' + d + "</span></div>";
+  }
+  function delta(a, b) {
+    var d = a - b;
+    if (d === 0) return ["no change", ""];
+    return [(d > 0 ? "+" : "−") + mib(Math.abs(d)), d > 0 ? "up" : "down"];
+  }
+
+  function render() {
+    var s = R[cur], st = s.stats, pv = cur > 0 ? R[cur - 1].stats : { reserved: 0, allocated: 0, inactiveSplit: 0, mallocs: 0 };
+    $("walk-count").textContent = "step " + (cur + 1) + " of " + N;
+    Array.prototype.forEach.call(linesEl.querySelectorAll("button"), function (b, i) {
+      b.classList.toggle("on", i === s.step.line);
+      b.setAttribute("aria-current", i === s.step.line ? "step" : "false");
+    });
+    $("walk-title").innerHTML = '<span class="n">' + String(cur + 1).padStart(2, "0") + "</span>" + esc(s.step.title);
+    $("walk-text").textContent = s.step.text;
+    $("walk-notes").innerHTML = s.ev.notes.map(function (n) { return "<li>" + esc(n) + "</li>"; }).join("");
+
+    var dr = delta(st.reserved, pv.reserved), da = delta(st.allocated, pv.allocated), ds = delta(st.inactiveSplit, pv.inactiveSplit);
+    var dm = st.mallocs - pv.mallocs;
+    statsEl.innerHTML =
+      statTile("Reserved", mib(st.reserved), dr[0], dr[1]) +
+      statTile("Allocated", mib(st.allocated), da[0], da[1]) +
+      statTile("Free in split segments", mib(st.inactiveSplit), ds[0], "") +
+      statTile("cudaMalloc calls", String(st.mallocs), dm ? "+" + dm + " in this step" : "no driver call", dm ? "up" : "");
+
+    segsEl.innerHTML = s.state.segs.map(function (g) {
+      var isNew = s.ev.type === "alloc" && s.ev.created && s.ev.seg === g.id;
+      var blocks = g.blocks.map(function (b) {
+        var pct = (b.size / g.size) * 100;
+        var now = s.ev.seg === g.id && s.ev.off === b.off && s.ev.type !== "empty";
+        var cls = "blk " + (b.alloc ? "k-" + b.kind : "free") + (now ? " now" : "");
+        var name = b.alloc ? b.label : "free";
+        var tip = name + " · " + CCA.bytes(b.size) + " at offset " + CCA.bytes(b.off);
+        return '<div class="' + cls + '" style="width:' + pct + '%" title="' + esc(tip) + '" data-name="' + esc(name) + '" data-size="' + esc(CCA.fmt(b.size)) + '">' +
+          "<b>" + esc(name) + "</b><span>" + esc(CCA.fmt(b.size)) + "</span></div>";
+      }).join("");
+      return '<div class="seg-row"><div class="seg-label"><b>S' + g.id + (isNew ? '<span class="badge">new</span>' : "") + "</b>" +
+        "<span>" + g.pool + " pool · " + CCA.fmt(g.size) + "</span><span>" + g.blocks.length + (g.blocks.length === 1 ? " block" : " blocks") + "</span></div>" +
+        '<div class="seg-body"><div class="seg-bar">' + blocks + '</div><div class="seg-small"></div></div></div>';
+    }).join("");
+    fitLabels();
+    range.value = String(cur + 1);
+    prev.disabled = cur === 0; next.disabled = cur === N - 1;
+    drawChart();
+  }
+
+  function fitLabels() {
+    Array.prototype.forEach.call(segsEl.querySelectorAll(".seg-row"), function (row) {
+      var small = [];
+      Array.prototype.forEach.call(row.querySelectorAll(".blk"), function (b) {
+        var tight = b.getBoundingClientRect().width < 52;
+        b.classList.toggle("tight", tight);
+        if (tight) small.push(b.getAttribute("data-name") + " " + b.getAttribute("data-size"));
+      });
+      row.querySelector(".seg-small").textContent = small.length ? "Narrow blocks: " + small.join(" · ") : "";
+    });
+  }
+
+  function drawChart() {
+    var svg = $("walk-chart");
+    var W = 960, H = 200, L = 64, Rr = 92, T = 16, B = 34;
+    var maxY = 100 * MiB;
+    var x = function (i) { return L + (i * (W - L - Rr)) / (N - 1); };
+    var y = function (v) { return T + (H - T - B) * (1 - v / maxY); };
+    var h = "";
+    [0, 25, 50, 75, 100].forEach(function (t) {
+      var yy = y(t * MiB);
+      h += '<line class="ch-grid" x1="' + L + '" x2="' + (W - Rr) + '" y1="' + yy + '" y2="' + yy + '"/>';
+      h += '<text class="ts" x="' + (L - 8) + '" y="' + (yy + 4) + '" text-anchor="end">' + t + " MiB</text>";
+    });
+    for (var i = 0; i < N; i++) h += '<text class="ts" x="' + x(i) + '" y="' + (H - 12) + '" text-anchor="middle">' + (i + 1) + "</text>";
+    var pr = R.map(function (r, i) { return x(i) + "," + y(r.stats.reserved); }).join(" ");
+    var pa = R.map(function (r, i) { return x(i) + "," + y(r.stats.allocated); }).join(" ");
+    h += '<polygon class="ch-area" points="' + x(0) + "," + y(0) + " " + pa + " " + x(N - 1) + "," + y(0) + '"/>';
+    h += '<polyline class="ch-all" points="' + pa + '"/>';
+    h += '<polyline class="ch-res" points="' + pr + '"/>';
+    h += '<line class="ch-cur" x1="' + x(cur) + '" x2="' + x(cur) + '" y1="' + T + '" y2="' + y(0) + '"/>';
+    R.forEach(function (r, i) {
+      var on = i === cur;
+      h += '<circle class="' + (on ? "ch-dot-r on" : "ch-dot-r") + '" cx="' + x(i) + '" cy="' + y(r.stats.reserved) + '" r="' + (on ? 5 : 3) + '"/>';
+      h += '<circle class="' + (on ? "ch-dot-a on" : "ch-dot-a") + '" cx="' + x(i) + '" cy="' + y(r.stats.allocated) + '" r="' + (on ? 5 : 3) + '"/>';
+    });
+    var last = R[N - 1].stats;
+    h += '<text class="ts ta" x="' + (x(N - 1) + 10) + '" y="' + (y(last.reserved) - 6) + '">reserved</text>';
+    h += '<text class="ts td" x="' + (x(N - 1) + 10) + '" y="' + (y(last.allocated) + 14) + '">allocated</text>';
+    var colW = (W - L - Rr) / (N - 1);
+    for (var j = 0; j < N; j++) h += '<rect class="ch-hit" data-i="' + j + '" x="' + (x(j) - colW / 2) + '" y="' + T + '" width="' + colW + '" height="' + (H - T - B) + '"><title>Step ' + (j + 1) + ": reserved " + mib(R[j].stats.reserved) + ", allocated " + mib(R[j].stats.allocated) + "</title></rect>";
+    svg.innerHTML = h;
+  }
+  $("walk-chart").addEventListener("click", function (e) {
+    var t = e.target.closest ? e.target.closest(".ch-hit") : null;
+    if (t) go(+t.getAttribute("data-i"));
+  });
+
+  function go(i) { cur = Math.max(0, Math.min(N - 1, i)); render(); }
+  prev.addEventListener("click", function () { go(cur - 1); });
+  next.addEventListener("click", function () { go(cur + 1); });
+  range.addEventListener("input", function () { go(+range.value - 1); });
+  root.addEventListener("keydown", function (e) {
+    if (e.target === range) return;
+    if (e.key === "ArrowRight") { go(cur + 1); e.preventDefault(); }
+    if (e.key === "ArrowLeft") { go(cur - 1); e.preventDefault(); }
+  });
+  var rt; window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(fitLabels, 120); });
+  render();
+})();
+
+</script>
+
+</body></html>

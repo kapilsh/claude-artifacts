@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Artifacts — research notes and tools</title>
+    <meta name="description" content="A collection of research artifacts, notes, and interactive tools generated from explorations in AI systems, GPU programming, and distributed training." />
+    <!-- Google Analytics (GA4). Same measurement ID as the blog: these apps are
+         separate repos, but they publish to paths under the same origin
+         (www.kapilsharma.dev/<app>/), so one property/data stream covers both
+         and sessions carry across without cross-domain measurement. -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-PXLMMX5QRS"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() { dataLayer.push(arguments); }
+      gtag('js', new Date());
+      gtag('config', 'G-PXLMMX5QRS');
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
