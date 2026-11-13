@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Module 1 · How the machine is built — OS fundamentals for AI systems</title>
+<style>
+/* ---------- theme ---------- */
+:root{
+  --bg:#f6f4ee; --paper:#fffdf8; --ink:#1d1f23; --ink2:#4a4e57; --mute:#7b808a;
+  --line:#d9d4c7; --line2:#e9e5da; --accent:#c2410c; --accent-soft:#fbe6da;
+  --cool:#0e7490; --cool-soft:#d8eef2; --ok:#3f7d20; --ok-soft:#e3f0d8; --warn:#a16207; --warn-soft:#f8ecc9;
+  --code-bg:#f0ece2; --shadow:0 1px 0 rgba(0,0,0,.04), 0 6px 24px -12px rgba(0,0,0,.18);
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+:root[data-theme="dark"]{
+  --bg:#121417; --paper:#191c20; --ink:#e7e5df; --ink2:#b4b6bb; --mute:#858a93;
+  --line:#33373e; --line2:#262a30; --accent:#ff8a4c; --accent-soft:#3a2418;
+  --cool:#4cc3d9; --cool-soft:#14323a; --ok:#8fcf6a; --ok-soft:#1f3218; --warn:#e8b54a; --warn-soft:#382d12;
+  --code-bg:#20242a; --shadow:0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121417; --paper:#191c20; --ink:#e7e5df; --ink2:#b4b6bb; --mute:#858a93;
+    --line:#33373e; --line2:#262a30; --accent:#ff8a4c; --accent-soft:#3a2418;
+    --cool:#4cc3d9; --cool-soft:#14323a; --ok:#8fcf6a; --ok-soft:#1f3218; --warn:#e8b54a; --warn-soft:#382d12;
+    --code-bg:#20242a; --shadow:0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16.5px/1.62 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--cool)} a:hover{color:var(--accent)}
+code,kbd,pre{font-family:var(--mono);font-size:.88em}
+code{background:var(--code-bg);padding:.08em .35em;border-radius:4px;overflow-wrap:anywhere}
+pre code{overflow-wrap:normal}
+pre{background:var(--code-bg);padding:12px 14px;border-radius:8px;overflow-x:auto;line-height:1.45;border:1px solid var(--line2)}
+pre code{background:none;padding:0}
+h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+h1{font-size:2.1rem;margin:.2em 0 .3em}
+h2{font-size:1.45rem;margin:0 0 .5em;display:flex;gap:.6em;align-items:baseline}
+h2 .num{font:600 .8rem var(--mono);color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 6px;transform:translateY(-3px)}
+h3{font-size:1.05rem;margin:1.4em 0 .4em}
+p{margin:.55em 0}
+ul,ol{padding-left:1.25em} li{margin:.2em 0}
+table{border-collapse:collapse;width:100%;font-size:.92em;margin:.6em 0}
+th,td{border-bottom:1px solid var(--line2);padding:6px 8px;text-align:left;vertical-align:top}
+th{font-weight:600;color:var(--ink2);border-bottom-color:var(--line)}
+td.n,th.n{text-align:right;font-family:var(--mono);white-space:nowrap}
+.wrap-table{overflow-x:auto}
+
+/* ---------- layout ---------- */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line2)}
+.top .in{max-width:1180px;margin:0 auto;padding:8px 20px;display:flex;align-items:center;gap:14px;font-size:.88rem}
+.top a{text-decoration:none;color:var(--ink2)} .top .sp{flex:1}
+.top .bar{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
+button{font:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:6px;padding:5px 11px;font-size:.86rem}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn[disabled]{opacity:.4;cursor:default}
+.grid{max-width:1180px;margin:0 auto;padding:0 20px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:40px}
+nav.toc{position:sticky;top:56px;align-self:start;padding-top:36px;font-size:.84rem;max-height:calc(100vh - 60px);overflow:auto}
+nav.toc a{display:block;color:var(--mute);text-decoration:none;padding:3px 0 3px 10px;border-left:2px solid var(--line2)}
+nav.toc a.on{color:var(--ink);border-left-color:var(--accent)}
+main{min-width:0;max-width:800px;padding:30px 0 80px}
+@media (max-width:900px){.grid{grid-template-columns:1fr} nav.toc{display:none}}
+.kicker{font:600 .78rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lede{font-size:1.08rem;color:var(--ink2)}
+.meta{font-size:.86rem;color:var(--mute);display:flex;gap:16px;flex-wrap:wrap}
+section{padding:34px 0 10px;border-top:1px solid var(--line2);margin-top:28px;scroll-margin-top:50px}
+
+/* ---------- callouts ---------- */
+.stack{border:1px solid var(--line);border-left:4px solid var(--cool);background:var(--paper);border-radius:8px;padding:10px 14px;margin:1em 0;box-shadow:var(--shadow)}
+.stack>b:first-child{display:block;font:600 .74rem var(--mono);text-transform:uppercase;letter-spacing:.07em;color:var(--cool);margin-bottom:2px}
+.why{border-left:3px solid var(--accent);padding:2px 0 2px 12px;margin:.9em 0;color:var(--ink2)}
+.why b{color:var(--ink)}
+.unsure{background:var(--warn-soft);border:1px dashed var(--warn);border-radius:6px;padding:6px 10px;font-size:.9em;margin:.7em 0}
+.unsure::before{content:"Unverified · ";font:600 .74rem var(--mono);color:var(--warn);text-transform:uppercase;letter-spacing:.05em}
+.tag{font:600 .7rem var(--mono);padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+
+/* ---------- figures ---------- */
+figure{margin:1.3em 0;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:var(--shadow)}
+figcaption{font-size:.84rem;color:var(--mute);margin-top:8px}
+figure .ftitle{font:600 .78rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--ink2);margin-bottom:8px;display:flex;gap:8px;align-items:center}
+figure .ftitle .live{color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 5px;font-size:.66rem}
+svg{max-width:100%;height:auto;display:block}
+svg text{font-family:var(--sans);fill:var(--ink)}
+svg .t-mono{font-family:var(--mono)}
+svg .t-mute{fill:var(--mute)} svg .t-acc{fill:var(--accent)} svg .t-cool{fill:var(--cool)}
+svg .box{fill:var(--paper);stroke:var(--line);stroke-width:1.2}
+svg .box2{fill:var(--bg);stroke:var(--line);stroke-width:1}
+svg .boxa{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4}
+svg .boxc{fill:var(--cool-soft);stroke:var(--cool);stroke-width:1.4}
+svg .ln{stroke:var(--ink2);stroke-width:1.4;fill:none}
+svg .lnm{stroke:var(--mute);stroke-width:1;fill:none;stroke-dasharray:3 3}
+svg .lna{stroke:var(--accent);stroke-width:2.4;fill:none}
+svg .lnc{stroke:var(--cool);stroke-width:2.4;fill:none}
+svg .fat{stroke-width:6}
+
+/* ---------- stepper ---------- */
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.ctrl .dots{display:flex;gap:4px;flex-wrap:wrap;margin-left:6px}
+.ctrl .dots i{width:9px;height:9px;border-radius:50%;background:var(--line);cursor:pointer;display:block}
+.ctrl .dots i.on{background:var(--accent)}
+.ctrl .count{font:.8rem var(--mono);color:var(--mute);margin-left:auto}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:var(--paper);color:var(--ink2);padding:5px 11px;font-size:.84rem;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--ink);color:var(--paper)}
+.narr{min-height:5.5em;margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line2)}
+.narr h4{margin:0 0 4px;font-size:.98rem}
+.narr p{margin:0;font-size:.93rem;color:var(--ink2)}
+.state{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px}
+.state div{border:1px solid var(--line2);border-radius:6px;padding:6px 9px;background:var(--paper)}
+.state div span{display:block;font:600 .68rem var(--mono);text-transform:uppercase;color:var(--mute);letter-spacing:.05em}
+.state div b{font:600 .95rem var(--mono)}
+.state div.chg{border-color:var(--accent);background:var(--accent-soft)}
+
+/* latency explorer */
+.lat-row{display:grid;grid-template-columns:minmax(150px,230px) 1fr 92px;gap:10px;align-items:center;padding:3px 0;cursor:pointer;border-radius:4px}
+.lat-row:hover{background:var(--bg)}
+.lat-row .lab{font-size:.86rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lat-row .trk{position:relative;height:14px;background:var(--line2);border-radius:3px}
+.lat-row .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--cool);transition:width .35s}
+.lat-row.grp-mem .fill{background:var(--cool)} .lat-row.grp-os .fill{background:var(--warn)} .lat-row.grp-io .fill{background:var(--accent)}
+.lat-row .val{font:.8rem var(--mono);text-align:right}
+.lat-row.sel{background:var(--accent-soft)}
+.axis{display:grid;grid-template-columns:minmax(150px,230px) 1fr 92px;gap:10px;font:.7rem var(--mono);color:var(--mute)}
+.axis .ticks{position:relative;height:16px}
+.axis .ticks span{position:absolute;transform:translateX(-50%)}
+.legend{display:flex;gap:14px;font-size:.8rem;color:var(--ink2);flex-wrap:wrap;margin:6px 0}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.bw-row{display:grid;grid-template-columns:minmax(150px,230px) 1fr 100px;gap:10px;align-items:center;padding:3px 0}
+.bw-row .lab{font-size:.86rem}
+.bw-row .trk{height:14px;background:var(--line2);border-radius:3px;position:relative}
+.bw-row .fill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:3px;transition:width .35s}
+.bw-row .val{font:.8rem var(--mono);text-align:right}
+@media (max-width:560px){.lat-row,.axis,.bw-row{grid-template-columns:110px 1fr 70px}}
+
+/* copy timeline */
+.tl{display:grid;grid-template-columns:130px 1fr;gap:6px 10px;align-items:center;margin-top:8px}
+.tl .lane{font:.78rem var(--mono);color:var(--ink2);text-align:right}
+.tl .trk{position:relative;height:24px;background:var(--bg);border:1px solid var(--line2);border-radius:4px;overflow:hidden}
+.tl .blk{position:absolute;top:2px;bottom:2px;border-radius:3px;font:.68rem var(--mono);color:#fff;display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;transition:opacity .25s}
+.tl .blk.cpu{background:var(--warn)} .tl .blk.dma{background:var(--cool)} .tl .blk.krn{background:var(--ok)} .tl .blk.wait{background:repeating-linear-gradient(45deg,var(--line),var(--line) 4px,transparent 4px,transparent 8px);color:var(--ink2)}
+.tl .blk.ghost{opacity:.15}
+.mem-cells{display:flex;gap:3px;flex-wrap:wrap}
+.mem-cells i{width:16px;height:16px;border-radius:3px;border:1px solid var(--line);background:var(--paper);display:block}
+.mem-cells i.f{background:var(--warn)} .mem-cells i.d{background:var(--cool)}
+
+/* data path */
+#dp svg .node rect{fill:var(--paper);stroke:var(--line);stroke-width:1.2;transition:all .25s}
+#dp svg .node.on rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+#dp svg .node.done rect{fill:var(--cool-soft);stroke:var(--cool)}
+#dp svg .node.off{opacity:.28}
+#dp svg .edge{stroke:var(--line);stroke-width:2;fill:none;transition:all .25s}
+#dp svg .edge.on{stroke:var(--accent);stroke-width:3.5;stroke-dasharray:8 6;animation:flow .8s linear infinite}
+#dp svg .edge.done{stroke:var(--cool);stroke-width:2.5}
+#dp svg .edge.off{opacity:.2}
+@keyframes flow{to{stroke-dashoffset:-14}}
+@media (prefers-reduced-motion:reduce){#dp svg .edge.on{animation:none}}
+.who{display:inline-block;font:600 .72rem var(--mono);padding:1px 6px;border-radius:4px;margin-right:6px}
+.who.cpu{background:var(--warn-soft);color:var(--warn)} .who.dma{background:var(--cool-soft);color:var(--cool)} .who.none{background:var(--ok-soft);color:var(--ok)}
+
+/* quiz + drill */
+details.q{border:1px solid var(--line);border-radius:8px;background:var(--paper);margin:10px 0;padding:0 14px}
+details.q summary{cursor:pointer;padding:11px 0;font-weight:500;list-style:none}
+details.q summary::-webkit-details-marker{display:none}
+details.q summary::before{content:"Q";font:600 .72rem var(--mono);color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 5px;margin-right:9px}
+details.q[open] summary::before{content:"A";background:var(--accent);color:#fff}
+details.q .a{padding:0 0 12px;color:var(--ink2);border-top:1px dashed var(--line2);padding-top:8px}
+details.q .crit{font:600 .7rem var(--mono);color:var(--cool);margin-left:6px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:700px){.cols{grid-template-columns:1fr}}
+.cols>div{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--paper);min-width:0}
+.cols h4{margin:0 0 6px;font-size:.92rem}
+.done-box{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--paper);margin-top:26px}
+.sources{font-size:.86rem;color:var(--ink2)} .sources li{margin:.35em 0}
+.kbd-hint{font-size:.75rem;color:var(--mute)}
+</style>
+</head>
+<body data-mod="m1">
+<div class="top"><div class="in">
+  <a href="index.html">← Course index</a><span class="sp"></span>
+  <span class="kbd-hint">Module 1 of 6</span>
+  <button class="btn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+</div><div class="bar" id="readBar"></div></div>
+
+<div class="grid">
+<nav class="toc" id="toc">
+  <a href="#map">0 · The map</a>
+  <a href="#cores">1 · Cores &amp; cache lines</a>
+  <a href="#latency">2 · Latency &amp; bandwidth</a>
+  <a href="#numa">3 · NUMA</a>
+  <a href="#pcie">4 · PCIe</a>
+  <a href="#nvlink">5 · NVLink &amp; C2C</a>
+  <a href="#dma">6 · DMA &amp; pinned memory</a>
+  <a href="#irq">7 · Interrupts vs polling</a>
+  <a href="#path">8 · The data path</a>
+  <a href="#drill">Drill</a>
+  <a href="#check">Self-check</a>
+  <a href="#sources">Sources</a>
+</nav>
+
+<main>
+<div class="kicker">Module 1 · OS fundamentals for AI systems</div>
+<h1>How the machine is built</h1>
+<p class="lede">Everything the kernel does later (page tables, scheduling, I/O) is a way of managing this hardware. This module covers what's physically in the box, how far apart things are in nanoseconds, and which wires your bytes cross on the way to the GPU.</p>
+<div class="meta"><span>≈35 min reading</span><span>3 interactive diagrams</span><span>Drill ≈20 min</span><span>Teaches completion criteria <b>#1</b> (pageable copies) and <b>#3</b> (NUMA placement for NCCL)</span></div>
+
+<!-- ======================================================= 0 -->
+<section id="map">
+<h2><span class="num">0</span>The map: your two machines</h2>
+<p>Your two boxes are the two basic designs. The <b>x86 + RTX 4090</b> is the classic <i>discrete</i> design: the CPU and GPU each have their own memory, joined by a PCIe link that's slower than either memory. The <b>DGX Spark</b> is a <i>unified</i> design: one pool of LPDDR5x behind a coherent fabric. The GPU reaches it over NVLink-C2C, and there's no PCIe hop between CPU and GPU. Datacenter nodes (8 GPUs + NICs behind PCIe switches, NVLink between GPUs) mix both ideas, and GB200 is a big Spark: Grace and Blackwell joined by C2C.</p>
+<figure>
+<div class="ftitle">Fig 0 · Discrete vs unified</div>
+<svg viewBox="0 0 840 330" role="img" aria-label="Block diagram comparing x86 plus RTX 4090 with DGX Spark">
+  <text x="20" y="22" font-weight="600">x86 box + RTX 4090 (discrete)</text>
+  <rect class="box" x="20" y="40" width="175" height="96" rx="6"/>
+  <text x="107" y="62" text-anchor="middle" font-weight="600">i9-13900K</text>
+  <text x="107" y="81" text-anchor="middle" font-size="11.5" class="t-mute">8 P-cores + 16 E-cores</text>
+  <text x="107" y="97" text-anchor="middle" font-size="11.5" class="t-mute">private L1/L2, 36 MB L3</text>
+  <text x="107" y="113" text-anchor="middle" font-size="11.5" class="t-mute">PCIe root complex</text>
+  <rect class="box2" x="20" y="180" width="175" height="54" rx="6"/>
+  <text x="107" y="203" text-anchor="middle" font-size="13">DDR5, 2 channels</text>
+  <text x="107" y="221" text-anchor="middle" font-size="11.5" class="t-mute">≈90 GB/s peak</text>
+  <line class="ln" x1="107" y1="136" x2="107" y2="180" style="stroke:var(--cool);stroke-width:6"/>
+  <rect class="box" x="275" y="40" width="130" height="96" rx="6"/>
+  <text x="340" y="66" text-anchor="middle" font-weight="600">RTX 4090</text>
+  <text x="340" y="86" text-anchor="middle" font-size="11.5" class="t-mute">AD102 GPU</text>
+  <text x="340" y="102" text-anchor="middle" font-size="11.5" class="t-mute">+ copy engines</text>
+  <rect class="box2" x="275" y="180" width="130" height="54" rx="6"/>
+  <text x="340" y="203" text-anchor="middle" font-size="13">24 GB GDDR6X</text>
+  <text x="340" y="221" text-anchor="middle" font-size="11.5" class="t-mute">≈1 TB/s</text>
+  <line class="ln" x1="340" y1="136" x2="340" y2="180" style="stroke:var(--cool);stroke-width:14"/>
+  <line class="lna" x1="195" y1="88" x2="275" y2="88"/>
+  <text x="235" y="78" text-anchor="middle" font-size="10.5" class="t-acc t-mono">PCIe 4 x16</text>
+  <text x="235" y="104" text-anchor="middle" font-size="10.5" class="t-acc t-mono">32 GB/s</text>
+  <rect class="box2" x="20" y="268" width="80" height="34" rx="5"/><text x="60" y="290" text-anchor="middle" font-size="12">NVMe</text>
+  <rect class="box2" x="115" y="268" width="80" height="34" rx="5"/><text x="155" y="290" text-anchor="middle" font-size="12">2.5 GbE</text>
+  <path class="lnm" d="M60 268 V252 H30 V136"/><path class="lnm" d="M155 268 V252 H185 V136"/>
+  <text x="215" y="282" font-size="11.5" class="t-mute">The CPU↔GPU link is ~30× slower</text>
+  <text x="215" y="298" font-size="11.5" class="t-mute">than either side's memory.</text>
+  <line class="lnm" x1="430" y1="12" x2="430" y2="318"/>
+  <text x="455" y="22" font-weight="600">DGX Spark · GB10 (unified)</text>
+  <rect class="box" x="455" y="40" width="175" height="96" rx="6"/>
+  <text x="542" y="62" text-anchor="middle" font-weight="600">S-die (CPU)</text>
+  <text x="542" y="81" text-anchor="middle" font-size="11.5" class="t-mute">10× X925 + 10× A725</text>
+  <text x="542" y="97" text-anchor="middle" font-size="11.5" class="t-mute">2 clusters × 16 MB L3</text>
+  <text x="542" y="113" text-anchor="middle" font-size="11.5" class="t-mute">16 MB SLC, mem ctrl, PCIe</text>
+  <rect class="box" x="700" y="40" width="125" height="96" rx="6"/>
+  <text x="762" y="62" text-anchor="middle" font-weight="600">G-die (GPU)</text>
+  <text x="762" y="81" text-anchor="middle" font-size="11.5" class="t-mute">Blackwell</text>
+  <text x="762" y="97" text-anchor="middle" font-size="11.5" class="t-mute">24 MB L2</text>
+  <text x="762" y="113" text-anchor="middle" font-size="11.5" class="t-mute">no DRAM of its own</text>
+  <line class="lnc" x1="630" y1="88" x2="700" y2="88" style="stroke-width:10"/>
+  <text x="665" y="72" text-anchor="middle" font-size="10.5" class="t-cool t-mono">NVLink-C2C</text>
+  <text x="665" y="112" text-anchor="middle" font-size="10.5" class="t-cool t-mono">coherent</text>
+  <rect class="boxc" x="455" y="180" width="370" height="54" rx="6"/>
+  <text x="640" y="203" text-anchor="middle" font-size="13" font-weight="600">128 GB LPDDR5x · one pool · 273 GB/s</text>
+  <text x="640" y="221" text-anchor="middle" font-size="11" class="t-mute">CPU and GPU read and write the same physical DRAM</text>
+  <line class="ln" x1="542" y1="136" x2="542" y2="180" style="stroke:var(--cool);stroke-width:6"/>
+  <text x="552" y="163" font-size="10" class="t-mute">GPU's traffic goes via C2C → S-die</text>
+  <rect class="box2" x="455" y="268" width="80" height="34" rx="5"/><text x="495" y="290" text-anchor="middle" font-size="12">NVMe</text>
+  <rect class="box2" x="550" y="268" width="120" height="40" rx="5"/><text x="610" y="285" text-anchor="middle" font-size="12">ConnectX-7</text><text x="610" y="300" text-anchor="middle" font-size="10" class="t-mute">2× PCIe Gen5 x4</text>
+  <path class="lnm" d="M495 268 V250 H445 V100 H455"/><path class="lnm" d="M670 288 H835 V140 H630"/>
+  <text x="685" y="282" font-size="11.5" class="t-mute">200 Gb/s to a</text>
+  <text x="685" y="298" font-size="11.5" class="t-mute">2nd Spark</text>
+</svg>
+<figcaption>Spark numbers are from NVIDIA's DGX Spark hardware page and the GB10 Hot Chips 2025 talk (see Sources). Sizes not to scale.</figcaption>
+</figure>
+<div class="stack"><b>Where this shows up in your stack</b>
+On the 4090, <code>tensor.cuda()</code> crosses the slowest wire in the box. On Spark the same call copies DRAM to DRAM inside one memory pool. It can still be expensive, because every byte is read and written through the same 273 GB/s. Most of this course is about which of those two worlds a given API call lives in.</div>
+</section>
+
+<!-- ======================================================= 1 -->
+<section id="cores">
+<h2><span class="num">1</span>Cores, cache lines, and coherence</h2>
+<p><b>What it is.</b> A core runs one instruction stream (two with SMT/hyperthreading). It owns registers and small, fast private caches (L1, L2), and shares a larger L3 with its neighbours. Memory moves between DRAM and caches only in fixed blocks called <b>cache lines</b>: 64 bytes on both your x86 box and the Spark's Arm cores. Read one byte and the hardware fetches its whole 64-byte line.</p>
+<p><b>How it works.</b> Each line in a cache has a state. The common protocol is <b>MESI</b>: Modified, Exclusive, Shared, Invalid. Before a core writes a line, every other core's copy must be invalidated. If two cores keep writing <i>different variables that happen to share a line</i>, the line bounces between their caches on every write. That's <b>false sharing</b>, and it can make a "parallel" loop slower than a serial one.</p>
+<figure>
+<div class="ftitle">Fig 1 · One core's view, and false sharing</div>
+<svg viewBox="0 0 760 230" role="img" aria-label="Cache hierarchy and false sharing illustration">
+  <rect class="box" x="20" y="20" width="110" height="40" rx="5"/><text x="75" y="45" text-anchor="middle" font-size="13">Core 0 regs</text>
+  <rect class="box" x="20" y="72" width="110" height="34" rx="5"/><text x="75" y="94" text-anchor="middle" font-size="12">L1d 48 KB</text>
+  <rect class="box" x="20" y="118" width="110" height="34" rx="5"/><text x="75" y="140" text-anchor="middle" font-size="12">L2 2 MB</text>
+  <rect class="box" x="150" y="20" width="110" height="40" rx="5"/><text x="205" y="45" text-anchor="middle" font-size="13">Core 1 regs</text>
+  <rect class="box" x="150" y="72" width="110" height="34" rx="5"/><text x="205" y="94" text-anchor="middle" font-size="12">L1d 48 KB</text>
+  <rect class="box" x="150" y="118" width="110" height="34" rx="5"/><text x="205" y="140" text-anchor="middle" font-size="12">L2 2 MB</text>
+  <rect class="boxc" x="20" y="164" width="240" height="30" rx="5"/><text x="140" y="184" text-anchor="middle" font-size="12">shared L3 (36 MB on the 13900K)</text>
+  <rect class="box2" x="20" y="202" width="240" height="22" rx="4"/><text x="140" y="218" text-anchor="middle" font-size="11" class="t-mute">DRAM</text>
+  <text x="290" y="34" font-size="12" class="t-mute">P-core sizes (Raptor Cove). Each step down:</text>
+  <text x="290" y="50" font-size="12" class="t-mute">≈3–10× more capacity, ≈3–5× more latency.</text>
+  <!-- false sharing -->
+  <text x="290" y="92" font-weight="600" font-size="13">False sharing: one 64-byte line, two writers</text>
+  <g transform="translate(290,104)">
+    <rect x="0" y="0" width="448" height="30" rx="3" class="box2"/>
+    <rect x="0" y="0" width="56" height="30" class="boxa"/><text x="28" y="20" text-anchor="middle" font-size="11" class="t-mono">ctr[0]</text>
+    <rect x="56" y="0" width="56" height="30" class="boxc"/><text x="84" y="20" text-anchor="middle" font-size="11" class="t-mono">ctr[1]</text>
+    <text x="280" y="20" text-anchor="middle" font-size="11" class="t-mute">… 6 more 8-byte slots in the same line …</text>
+    <path class="lna" d="M28 58 V36" marker-end="url(#ah)"/><path class="lnc" d="M84 58 V36" marker-end="url(#ahc)"/>
+    <text x="28" y="74" text-anchor="middle" font-size="11" class="t-acc">core 0</text>
+    <text x="84" y="74" text-anchor="middle" font-size="11" class="t-cool">core 1</text>
+    <text x="130" y="52" font-size="12" class="t-mute">Each write invalidates the other core's copy,</text>
+    <text x="130" y="68" font-size="12" class="t-mute">so the whole line ping-pongs between caches.</text>
+    <text x="0" y="98" font-size="12" class="t-mute">≈ tens of ns per bounce, worse across clusters or sockets.</text>
+    <text x="0" y="114" font-size="12" class="t-acc">Fix: give each writer its own 64-byte line (padding).</text>
+  </g>
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--accent)"/></marker><marker id="ahc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--cool)"/></marker></defs>
+</svg>
+<figcaption>Cache sizes are per-core for the i9-13900K P-cores (lscpu reports totals). Spark: each core has a private L2 (2 MB on X925, 512 KB on A725), each 10-core cluster shares an L3, and a 16 MB system-level cache sits in front of DRAM. The Hot Chips deck gives 16 MB of L3 per cluster; the Spark's sysfs reports 8 MB for cluster 0 (CPUs 0–9) and 16 MB for cluster 1 (CPUs 10–19).</figcaption>
+</figure>
+<p><b>Hybrid cores.</b> Both of your CPUs mix big and small cores. The 13900K has 8 P-cores (CPUs 0–15 with hyperthreads) and 16 E-cores (CPUs 16–31). The Spark has 10 Cortex-X925 and 10 Cortex-A725 in two clusters, interleaved in the CPU numbering: CPUs 0–4 and 10–14 are A725 (2.8 GHz), and 5–9 and 15–19 are X925 (3.9 GHz). So CPU 0 is a <i>little</i> core, which matters if a script pins to it. NVIDIA's Spark optimization guide specifically warns against concurrent writes to the same cache lines from different cores, "especially ones in different clusters."</p>
+<div class="why"><b>Why it matters for AI workloads:</b> your hot host-side code is single-threaded more often than you'd think: the Python launch loop, the NCCL proxy thread, a DataLoader collate. Which core it lands on (P vs E, near vs far cluster) and whether its data stays in cache can change step time measurably. The drill shows a 2× difference in one copy path just from picking an E-core.</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+Strided CPU tensor ops (<code>t[:, ::2]</code>, a non-contiguous <code>.permute()</code>) waste most of every 64-byte line they fetch, which is why <code>.contiguous()</code> before CPU-side work pays off. Lock-free host-memory flags polled by both CPU and GPU (NCCL proxy FIFOs, <code>cudaHostAlloc</code>'d semaphores) are laid out one per cache line for exactly this reason.</div>
+</section>
+
+<!-- ======================================================= 2 -->
+<section id="latency">
+<h2><span class="num">2</span>Latency and bandwidth, in orders of magnitude</h2>
+<p><b>What it is.</b> Every layer, from register to network, trades distance for capacity. Two numbers describe each one: <b>latency</b> (how long until the first byte arrives) and <b>bandwidth</b> (bytes per second once data is flowing). You don't need exact values. You need the ratios, because they decide whether the fix is "batch it," "overlap it," or "keep it out of that layer."</p>
+<p><b>How to read it.</b> Each step down the hierarchy costs roughly 10× more latency. Hiding latency always works the same way: keep many requests in flight (out-of-order CPUs, GPU warps, NVMe queues, NCCL channels) so bandwidth, not latency, sets the speed.</p>
+
+<figure id="latfig">
+<div class="ftitle">Fig 2 · Latency &amp; bandwidth explorer <span class="live">interactive</span></div>
+<div class="ctrl" style="margin-top:0">
+  <div class="seg" id="latMode"><button class="on" data-m="lat">Latency</button><button data-m="bw">Bandwidth</button></div>
+  <div class="seg" id="latScale"><button class="on" data-s="real">Real time</button><button data-s="human">If 1 ns = 1 s</button></div>
+  <span id="bwSizeWrap" style="display:none;font-size:.86rem">Move <select id="bwSize" class="btn">
+    <option value="0.001">1 MB</option><option value="1" selected>1 GB</option><option value="16">16 GB (8B model, bf16)</option><option value="140">140 GB (70B model, bf16)</option></select></span>
+</div>
+<div id="latPane">
+  <div class="legend"><span><i style="background:var(--cool)"></i>memory hierarchy</span><span><i style="background:var(--warn)"></i>OS / CUDA software costs</span><span><i style="background:var(--accent)"></i>devices &amp; network</span></div>
+  <div class="axis"><span></span><div class="ticks" id="latTicks"></div><span></span></div>
+  <div id="latRows"></div>
+</div>
+<div id="bwPane" style="display:none">
+  <p style="font-size:.86rem;color:var(--mute);margin:4px 0 8px">Theoretical peak per direction, linear scale. The time column is the best case for moving the chosen size over that link.</p>
+  <div id="bwRows"></div>
+</div>
+<div class="narr" id="latNote"><h4>Click any row</h4><p>Each row has a note on where the number comes from and why it matters for your workloads.</p></div>
+<figcaption>Values are ballpark figures for current hardware (± 2× is normal). Treat them as orders of magnitude, and measure your own with the drills. Sources are at the bottom of the page.</figcaption>
+</figure>
+
+<div class="why"><b>Why it matters for AI workloads:</b> a 4090 does ≈80 TFLOP/s of dense bf16 work, roughly 80,000 flops per nanosecond. During one 100 ns DRAM miss on the host, the GPU could have done eight million flops. Host-side latency is invisible only while the GPU has a deep queue of work. As soon as the queue drains, every microsecond of host latency becomes GPU idle time (Module 3 builds on this).</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+A <code>cudaLaunchKernel</code> costs a few µs of CPU time. That's why a step made of thousands of small kernels is launch-bound, and why CUDA graphs and <code>torch.compile</code>'s kernel fusion help. Small NCCL all-reduces are latency-bound (µs per hop), and large ones are bandwidth-bound (GB/s per link). NCCL's algorithm choice (ring vs tree) and <code>NCCL_ALGO</code> tuning sit on that boundary.</div>
+</section>
+
+<!-- ======================================================= 3 -->
+<section id="numa">
+<h2><span class="num">3</span>NUMA: not all memory is equally close</h2>
+<p><b>What it is.</b> In a multi-socket server, each CPU socket has its own memory controllers and its own PCIe root complexes. Memory and devices attached to <i>your</i> socket are local, and those on the other socket are remote: you reach them across the socket interconnect (Intel UPI, AMD Infinity Fabric). That's <b>Non-Uniform Memory Access</b>. Linux exposes each socket (or sub-socket domain) as a <b>NUMA node</b> with its own CPUs, memory, and a <code>numa_node</code> attribute on every PCIe device.</p>
+<p><b>How it works.</b> By default Linux allocates a page on the node of the CPU that first touches it ("first-touch" policy). The scheduler tries to keep threads near their memory but doesn't guarantee it. A remote access adds roughly 50–100% latency, and the socket link has less bandwidth than local memory, shared by everyone crossing it.</p>
+<figure>
+<div class="ftitle">Fig 3 · A typical 2-socket, 8-GPU training node</div>
+<svg viewBox="0 0 760 300" role="img" aria-label="Two socket server with GPUs and NICs attached to PCIe switches">
+  <rect class="box2" x="10" y="10" width="360" height="222" rx="8"/><text x="22" y="30" font-size="12" class="t-mute t-mono">NUMA node 0</text>
+  <rect class="box2" x="390" y="10" width="360" height="222" rx="8"/><text x="402" y="30" font-size="12" class="t-mute t-mono">NUMA node 1</text>
+  <rect class="box" x="120" y="40" width="140" height="56" rx="6"/><text x="190" y="64" text-anchor="middle" font-weight="600">CPU socket 0</text><text x="190" y="82" text-anchor="middle" font-size="11" class="t-mute">cores, L3, root complex</text>
+  <rect class="box" x="500" y="40" width="140" height="56" rx="6"/><text x="570" y="64" text-anchor="middle" font-weight="600">CPU socket 1</text><text x="570" y="82" text-anchor="middle" font-size="11" class="t-mute">cores, L3, root complex</text>
+  <rect class="boxc" x="20" y="48" width="80" height="40" rx="5"/><text x="60" y="73" text-anchor="middle" font-size="12">DRAM 0</text>
+  <rect class="boxc" x="660" y="48" width="80" height="40" rx="5"/><text x="700" y="73" text-anchor="middle" font-size="12">DRAM 1</text>
+  <line class="ln" x1="100" y1="68" x2="120" y2="68" style="stroke-width:4"/><line class="ln" x1="640" y1="68" x2="660" y2="68" style="stroke-width:4"/>
+  <line class="lna" x1="260" y1="68" x2="500" y2="68"/><text x="380" y="60" text-anchor="middle" font-size="11" class="t-acc t-mono">UPI / xGMI (socket link)</text>
+  <!-- switches -->
+  <g font-size="11">
+    <rect class="box" x="30" y="130" width="150" height="30" rx="4"/><text x="105" y="150" text-anchor="middle">PCIe switch A</text>
+    <rect class="box" x="200" y="130" width="150" height="30" rx="4"/><text x="275" y="150" text-anchor="middle">PCIe switch B</text>
+    <rect class="box" x="410" y="130" width="150" height="30" rx="4"/><text x="485" y="150" text-anchor="middle">PCIe switch C</text>
+    <rect class="box" x="580" y="130" width="150" height="30" rx="4"/><text x="655" y="150" text-anchor="middle">PCIe switch D</text>
+    <path class="ln" d="M150 96 V113 H105 V130"/><path class="ln" d="M230 96 V113 H275 V130"/>
+    <path class="ln" d="M530 96 V113 H485 V130"/><path class="ln" d="M610 96 V113 H655 V130"/>
+    <!-- GPUs & NICs -->
+    <rect class="boxa" x="30" y="190" width="45" height="30" rx="4"/><text x="52" y="210" text-anchor="middle">G0</text>
+    <rect class="boxa" x="80" y="190" width="45" height="30" rx="4"/><text x="102" y="210" text-anchor="middle">G1</text>
+    <rect class="boxc" x="130" y="190" width="50" height="30" rx="4"/><text x="155" y="210" text-anchor="middle">NIC0</text>
+    <rect class="boxa" x="200" y="190" width="45" height="30" rx="4"/><text x="222" y="210" text-anchor="middle">G2</text>
+    <rect class="boxa" x="250" y="190" width="45" height="30" rx="4"/><text x="272" y="210" text-anchor="middle">G3</text>
+    <rect class="boxc" x="300" y="190" width="50" height="30" rx="4"/><text x="325" y="210" text-anchor="middle">NIC1</text>
+    <rect class="boxa" x="410" y="190" width="45" height="30" rx="4"/><text x="432" y="210" text-anchor="middle">G4</text>
+    <rect class="boxa" x="460" y="190" width="45" height="30" rx="4"/><text x="482" y="210" text-anchor="middle">G5</text>
+    <rect class="boxc" x="510" y="190" width="50" height="30" rx="4"/><text x="535" y="210" text-anchor="middle">NIC2</text>
+    <rect class="boxa" x="580" y="190" width="45" height="30" rx="4"/><text x="602" y="210" text-anchor="middle">G6</text>
+    <rect class="boxa" x="630" y="190" width="45" height="30" rx="4"/><text x="652" y="210" text-anchor="middle">G7</text>
+    <rect class="boxc" x="680" y="190" width="50" height="30" rx="4"/><text x="705" y="210" text-anchor="middle">NIC3</text>
+    <path class="lnm" d="M52 190 V160 M102 190 V160 M155 190 V160 M222 190 V160 M272 190 V160 M325 190 V160 M432 190 V160 M482 190 V160 M535 190 V160 M602 190 V160 M652 190 V160 M705 190 V160"/>
+  </g>
+  <text x="12" y="270" font-size="11" class="t-mute">G0↔NIC0: PIX (same switch).  G0↔NIC1: NODE (via socket 0's root complex).  G0↔NIC2: SYS (crosses UPI).</text>
+  <text x="12" y="288" font-size="11" class="t-mute">NVLink/NVSwitch between the GPUs is omitted; it carries GPU↔GPU traffic but not GPU↔NIC traffic.</text>
+</svg>
+<figcaption>Labels are the <code>nvidia-smi topo -m</code> path types. Layouts differ by vendor, so always check your own node.</figcaption>
+</figure>
+<p><b>The GPU and NIC have NUMA nodes too.</b> Each GPU and each NIC hangs off one socket's root complex. Inter-node NCCL traffic flows GPU memory → PCIe → NIC → wire. If the GPU and its NIC share a PCIe switch, that path never touches a CPU. If they sit on different sockets, every byte crosses the socket link or bounces through host memory, and it competes with everything else using that link.</p>
+<div class="why"><b>Why it matters for AI workloads (completion criterion #3):</b> NCCL reads the PCIe/NVLink topology at init and pairs each GPU with its <i>closest</i> NIC. It enables GPUDirect RDMA (NIC reads/writes GPU memory directly) only when the GPU-to-NIC distance is within <code>NCCL_NET_GDR_LEVEL</code>. When the distance is too far, it stages through host memory instead. The proxy thread that drives the NIC, and the pinned bounce buffers it uses, should also live on the GPU's NUMA node. Get placement wrong and you lose bandwidth twice: the transfer crosses the socket link, and the CPU-side helper runs on remote memory.</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+<code>nvidia-smi topo -m</code> prints each GPU's CPU and NUMA affinity and its distance to every NIC. <code>NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,GRAPH</code> logs which NIC each rank picked and whether GDR is on (look for <code>GDRDMA</code> in the channel lines). Launchers that bind each rank to its GPU's NUMA node (<code>numactl --cpunodebind=N --membind=N</code>, or Slurm's <code>--cpu-bind</code>) keep DataLoader workers and pinned buffers local. NCCL also honors the CPU affinity it inherits (<code>NCCL_IGNORE_CPU_AFFINITY=0</code> by default), so a bad launcher binding becomes NCCL's binding.</div>
+<p><b>Your machines:</b> the i9-13900K and the Spark each expose <b>one</b> NUMA node, so true cross-NUMA effects only show up on multi-socket servers. The drill confirms this, then runs a near/far core comparison instead (P-core vs E-core on x86, X925 vs A725 on Spark). On x86 the CPU doing the copy matters: an E-core halves pageable throughput. On the Spark it doesn't (≈59 GB/s on either core type), because the pageable path there isn't a CPU memcpy. The core still matters on the Spark for launch-bound work, by 5×, as Module 3 measures.</p>
+</section>
+
+<!-- ======================================================= 4 -->
+<section id="pcie">
+<h2><span class="num">4</span>PCIe: lanes, generations, topology</h2>
+<p><b>What it is.</b> PCIe is a packet-switched, point-to-point serial bus. A link is 1–16 <b>lanes</b> wide. Each generation doubles the per-lane rate. The CPU's <b>root complex</b> is the root of a tree. <b>Switches</b> fan one upstream link out to several devices, and devices under the same switch can talk peer-to-peer without going up to the CPU.</p>
+<div class="wrap-table"><table>
+<tr><th>Gen</th><th class="n">GT/s per lane</th><th class="n">x16, per direction</th><th>Typical device</th></tr>
+<tr><td>3.0</td><td class="n">8</td><td class="n">≈16 GB/s</td><td>V100-era GPUs, 100G NICs</td></tr>
+<tr><td>4.0</td><td class="n">16</td><td class="n">≈32 GB/s</td><td><b>RTX 4090</b>, A100, Gen4 NVMe (x4 ≈ 8 GB/s)</td></tr>
+<tr><td>5.0</td><td class="n">32</td><td class="n">≈63 GB/s</td><td>H100/B200 host link, 400G NICs; Spark's CX-7 (as 2× x4)</td></tr>
+<tr><td>6.0</td><td class="n">64</td><td class="n">≈121 GB/s</td><td>emerging (800G NICs)</td></tr>
+</table></div>
+<p>Real throughput is about 75–85% of these numbers after packet headers and flow control. Your 4090 measures ≈20 GB/s pinned H2D against a 32 GB/s peak (see the drill).</p>
+<p><b>Links downtrain when idle.</b> The drill on your 4090 reported <code>pcie.link.gen.current = 1</code> at idle. That's power management (ASPM / dynamic link speed), not a fault. Check the link <i>under load</i> before blaming a riser or slot. A link that stays at x8 or Gen3 under load is a real problem, and it's a common one.</p>
+<p><b>Reading <code>nvidia-smi topo -m</code>:</b> each cell names the worst hop between two devices, nearest first:</p>
+<div class="wrap-table"><table>
+<tr><th>Code</th><th>Path</th><th>Implication</th></tr>
+<tr><td><code>NV#</code></td><td># bonded NVLinks</td><td>GPU↔GPU at NVLink speed, no PCIe involved</td></tr>
+<tr><td><code>PIX</code></td><td>at most one PCIe switch</td><td>best case for GPU↔NIC (GPUDirect RDMA)</td></tr>
+<tr><td><code>PXB</code></td><td>several PCIe switches, not through the CPU</td><td>still good for P2P and GDR</td></tr>
+<tr><td><code>PHB</code></td><td>through a CPU host bridge</td><td>traffic touches the root complex; GDR is often slower</td></tr>
+<tr><td><code>NODE</code></td><td>between host bridges in one NUMA node</td><td>crosses on-die fabric</td></tr>
+<tr><td><code>SYS</code></td><td>across the socket interconnect</td><td>worst: NCCL usually won't use GDR here</td></tr>
+</table></div>
+<div class="why"><b>Why it matters for AI workloads:</b> PCIe is usually the narrowest pipe a tensor crosses. The H2D link sets a ceiling on how fast you can feed a discrete GPU from host memory, and on how fast you can offload optimizer state or KV cache to the CPU. In multi-node training, the GPU↔NIC PCIe path is part of every inter-node all-reduce.</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+ZeRO-Offload / FSDP CPU offload, KV-cache offload to host, and <code>pin_memory</code>'d DataLoader batches are all PCIe-bound on discrete GPUs. A rough rule: if per-step host↔device traffic divided by ≈20 GB/s (Gen4) or ≈50 GB/s (Gen5) is close to your compute time, the step is PCIe-bound, and overlap is the only fix. The <code>NCCL_P2P_LEVEL</code> and <code>NCCL_NET_GDR_LEVEL</code> settings take these same codes (<code>PIX</code>, <code>PXB</code>, <code>PHB</code>, <code>SYS</code>) as thresholds.</div>
+</section>
+
+<!-- ======================================================= 5 -->
+<section id="nvlink">
+<h2><span class="num">5</span>NVLink and NVLink-C2C</h2>
+<p><b>What it is.</b> NVLink is NVIDIA's GPU-to-GPU link: point-to-point, much wider than PCIe, and switched through NVSwitch within a node or rack. On Blackwell each GPU gets 1.8 TB/s of NVLink bandwidth in total (both directions). <b>NVLink-C2C</b> (chip-to-chip) applies the same technology between a CPU die and a GPU die, with <b>cache coherence</b>: the CPU and GPU can each cache lines from the other's memory, and hardware keeps those copies consistent.</p>
+<div class="wrap-table"><table>
+<tr><th>System</th><th>CPU↔GPU link</th><th class="n">Bandwidth</th><th>Coherent?</th></tr>
+<tr><td>x86 + RTX 4090</td><td>PCIe 4.0 x16</td><td class="n">≈32 GB/s/dir</td><td>No: separate memories; copies required</td></tr>
+<tr><td>x86 + H100/B200</td><td>PCIe 5.0 x16</td><td class="n">≈63 GB/s/dir</td><td>No</td></tr>
+<tr><td>GH200 / GB200 (Grace)</td><td>NVLink-C2C</td><td class="n">900 GB/s total</td><td>Yes. The GPU still has its own HBM</td></tr>
+<tr><td><b>DGX Spark (GB10)</b></td><td>NVLink-C2C</td><td class="n">≈600 GB/s aggregate</td><td>Yes. The GPU has <i>no</i> own memory: everything is LPDDR5x at 273 GB/s</td></tr>
+</table></div>
+<p><b>How Spark differs.</b> GB10 is two dies in one package. The S-die (MediaTek-built: CPU, memory controller, PCIe) and the G-die (Blackwell GPU, 24 MB L2) are joined by C2C. The GPU's L2 is physically tagged and caches system physical addresses. The GPU translates virtual addresses through ATS (Address Translation Services) with the system MMU, the same page tables the CPU uses (Module 2). C2C is faster than memory here, so on Spark the <b>LPDDR5x is the bottleneck</b>, not the link. (<code>nvidia-smi c2c -s</code> on the Spark lists 8 C2C links at 43.125 GB/s each, 345 GB/s in total, without saying whether that's per direction. Either way it's above 273 GB/s.)</p>
+<div class="why"><b>Why it matters for AI workloads:</b> on a discrete GPU, "memory-bound" means HBM/GDDR bandwidth (≈1 TB/s on the 4090), and host↔device transfers are a separate, much slower problem. On Spark there's a single budget: 273 GB/s shared by CPU and GPU. Decode for a large LLM is memory-bound, so token rate is roughly bandwidth divided by bytes read per token, and a CPU thread streaming through memory at the same time takes from the same budget.</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+On Spark, <code>cudaMalloc</code> and <code>malloc</code> come from the same DRAM, and <code>cudaMemGetInfo</code> under-reports what you can allocate because it doesn't count page cache the OS could reclaim (NVIDIA lists this as a known issue). In NCCL across two Sparks, NVIDIA states GPUDirect RDMA is <i>not</i> supported: <code>cudaMalloc</code> memory isn't coherently accessible to PCIe devices, so nvidia-peermem, dma-buf and GDRCopy don't work. NVIDIA's recommended fallback is to allocate communication buffers with <code>cudaHostAlloc</code> and register those with the NIC.</div>
+</section>
+
+<!-- ======================================================= 6 -->
+<section id="dma">
+<h2><span class="num">6</span>DMA, copy engines, and why pinned memory matters</h2>
+<p><b>What it is.</b> <b>DMA</b> (direct memory access) means a device reads or writes host memory itself, without a CPU loop doing the copying. NVMe controllers, NICs and the GPU's <b>copy engines</b> are all DMA engines. The CPU writes a descriptor ("copy N bytes from physical address A to B") into a queue, and the device does the rest.</p>
+<p><b>How it works.</b> A device can't use your process's virtual addresses on its own. It needs <i>bus/physical addresses</i> that will stay valid for the whole transfer. Ordinary <code>malloc</code> memory is <b>pageable</b>: the kernel can move a page, swap it out, or not have allocated it yet (Module 2 explains why). <b>Pinned</b> (page-locked) memory from <code>cudaHostAlloc</code> or <code>cudaHostRegister</code> is locked in place and pre-mapped for the device, so the driver can hand its addresses straight to the copy engine.</p>
+<p>For pageable memory, the CUDA driver keeps its own small pinned <b>staging buffers</b>. A pageable H2D copy is really two copies: the <i>CPU</i> memcpy's chunks into staging, and the copy engine DMAs each chunk across PCIe, pipelined.</p>
+
+<figure id="cp">
+<div class="ftitle">Fig 4 · Pageable vs pinned <code>cudaMemcpyAsync</code> <span class="live">interactive</span></div>
+<div class="ctrl" style="margin-top:0">
+  <div class="seg" id="cpMode"><button class="on" data-m="pg">Pageable source</button><button data-m="pn">Pinned source</button></div>
+</div>
+<div class="tl" id="cpTl">
+  <div class="lane">CPU thread</div><div class="trk" id="cpCpu"></div>
+  <div class="lane">copy engine</div><div class="trk" id="cpDma"></div>
+  <div class="lane">GPU SMs</div><div class="trk" id="cpSm"></div>
+</div>
+<div style="display:grid;grid-template-columns:130px 1fr;gap:6px 10px;margin-top:10px;align-items:center">
+  <div class="lane" style="font:.78rem var(--mono);color:var(--ink2);text-align:right">user buffer</div><div class="mem-cells" id="cpSrc"></div>
+  <div class="lane" style="font:.78rem var(--mono);color:var(--ink2);text-align:right" id="cpStgLab">staging (pinned)</div><div class="mem-cells" id="cpStg"></div>
+  <div class="lane" style="font:.78rem var(--mono);color:var(--ink2);text-align:right">GPU memory</div><div class="mem-cells" id="cpDst"></div>
+</div>
+<div class="narr" id="cpNarr"></div>
+<div class="state" id="cpState"></div>
+<div class="ctrl">
+  <button class="btn" id="cpPrev">◀ Back</button><button class="btn primary" id="cpNext">Next ▶</button><button class="btn" id="cpReset">Reset</button>
+  <div class="dots" id="cpDots"></div><span class="count" id="cpCount"></span>
+</div>
+<figcaption>The staging-buffer pipeline is simplified: chunk sizes and the number of staging buffers are driver internals and aren't documented. The behaviour shown (when the call returns, and who moves the bytes) follows the CUDA runtime's documented sync rules, and you can see it in the drill.</figcaption>
+</figure>
+
+<div class="why"><b>Why it matters for AI workloads (completion criterion #1):</b> a pageable copy is slower because (a) the bytes cross DRAM twice (user buffer → staging → PCIe), (b) throughput is capped by one CPU core's memcpy speed, and (c) the copy engine waits on the CPU between chunks. It can't be truly async because the driver can only DMA from pinned memory. Someone has to stage the pageable bytes, and that someone is your calling thread, so <code>cudaMemcpyAsync</code> doesn't return until the data has been staged. The CUDA docs say pageable async copies "might be synchronous with respect to host." Your 4090 shows it: the pageable call held the thread for ≈120% of the pinned transfer time, while the pinned call returned in ≈3 µs.</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+<code>tensor.to("cuda", non_blocking=True)</code> overlaps with compute <i>only</i> if the source is pinned. That's what <code>DataLoader(pin_memory=True)</code> buys you: a background thread copies each batch into pinned memory so the main thread's H2D copy becomes a real DMA. In <code>nsys</code>, a pageable copy shows up as <code>Memcpy HtoD (Pageable)</code> with the CPU stuck in the API call. Pinning has a cost: pinned pages can't be swapped or reclaimed, so pinning tens of GB starves the page cache (Module 2), and on Spark it comes out of the same 128 GB the GPU uses.</div>
+</section>
+
+<!-- ======================================================= 7 -->
+<section id="irq">
+<h2><span class="num">7</span>Interrupts vs polling</h2>
+<p><b>What it is.</b> When a device finishes work (a packet arrived, an NVMe read completed, a copy finished), it has two ways to tell the CPU. It can raise an <b>interrupt</b>: modern devices use <b>MSI-X</b>, a memory write that becomes an interrupt on a chosen core, with one vector per queue. Or the CPU can <b>poll</b>: spin on a completion flag in memory.</p>
+<p><b>How it works.</b> An interrupt stops whatever that core was running, enters the kernel's handler, and usually wakes a sleeping thread, which the scheduler then has to run. End to end that's microseconds, and more if the target core was busy or in a deep sleep state. Polling reacts in the time it takes to see a cache line change (≈100 ns), but it burns a whole core. High-rate devices compromise: <b>interrupt coalescing</b> (one interrupt per batch), NAPI in the network stack (switch to polling under load), and per-CPU NVMe queues (the interrupt lands on the core that asked).</p>
+<div class="why"><b>Why it matters for AI workloads:</b> the latency-critical paths in your stack poll. NCCL kernels spin on flags in GPU or host memory, the NCCL proxy thread busy-polls the NIC's completion queue, and RDMA (Module 4) is built on user-space polling instead of interrupts. The trade-off is that those spinning threads need a core to themselves. If the scheduler shares that core with a DataLoader worker, latency jumps (Module 3).</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+<code>cudaStreamSynchronize</code> spin-waits by default for a short time and then may yield. <code>cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync)</code> makes the CPU sleep until the GPU interrupts instead: less CPU burn, more wake-up latency. <code>/proc/interrupts</code> shows which cores take the NIC's and GPU's interrupts, and IRQ affinity is set in <code>/proc/irq/*/smp_affinity</code> (Module 3).</div>
+</section>
+
+<!-- ======================================================= 8 -->
+<section id="path">
+<h2><span class="num">8</span>The end-to-end data path</h2>
+<p>Here is everything above combined: a checkpoint shard or a training batch travelling from disk to a GPU and then to another GPU or node. At each hop, notice <b>who moves the bytes</b> (a CPU core or a DMA engine), and how many times they're copied through DRAM.</p>
+<figure id="dp">
+<div class="ftitle">Fig 5 · Disk → GPU → network, step by step <span class="live">interactive</span></div>
+<div class="ctrl" style="margin-top:0">
+  <div class="seg" id="dpMode"><button class="on" data-m="x86">x86 + 4090</button><button data-m="spark">DGX Spark</button><button data-m="dc">8-GPU DC node</button></div>
+</div>
+<svg viewBox="0 0 760 250" id="dpSvg" role="img" aria-label="Data path diagram"></svg>
+<div class="narr" id="dpNarr"></div>
+<div class="state" id="dpState"></div>
+<div class="ctrl">
+  <button class="btn" id="dpPrev">◀ Back</button><button class="btn primary" id="dpNext">Next ▶</button><button class="btn" id="dpReset">Reset</button>
+  <div class="dots" id="dpDots"></div><span class="count" id="dpCount"></span>
+</div>
+<figcaption>Keyboard: focus the figure, then use ← / →. "DRAM passes" counts how many times the payload is written into host DRAM.</figcaption>
+</figure>
+<div class="why"><b>Why it matters for AI workloads:</b> each extra copy through host DRAM costs memory bandwidth and usually a CPU core. GPUDirect Storage and GPUDirect RDMA (Module 4) exist to cut out exactly those copies. Faster checkpoint loading, input pipelines and inter-node communication all come down to removing hops in this diagram, or overlapping the ones you can't remove.</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+<code>torch.load</code> of a pickled checkpoint takes the full path: read into page cache, copy to Python-owned buffers, then H2D. <code>safetensors</code> with <code>mmap</code> skips the user-buffer copy (Module 2). On the network side, NCCL's <code>NET/IB : GPU Direct RDMA enabled</code> log line means the "bounce through host" step below has been removed.</div>
+</section>
+
+<!-- ======================================================= drill -->
+<section id="drill">
+<h2><span class="num">D</span>Drill: inspect and measure your machines</h2>
+<p>Two files in <code>drills/</code>. Run them on both boxes and keep the output, because Module 2 compares against it.</p>
+<pre><code># one-time (both boxes): topology tools
+sudo apt install hwloc numactl
+
+# A. topology: CPUs, caches, NUMA, PCIe tree, GPU/NIC affinity
+bash drills/m1_machine.sh topo
+
+# B. pinned vs pageable bandwidth + "is it really async?"
+bash drills/m1_machine.sh bw          # = python3 drills/m1_h2d_bandwidth.py
+
+# C. CPU placement: cross-NUMA if you have >1 node, else big core vs small core
+bash drills/m1_machine.sh place
+
+# optional: a picture of the topology
+lstopo --whole-io topo.png</code></pre>
+<h3>What to look for</h3>
+<ol>
+<li><b>Topology.</b> Find the cache-line size, core types, NUMA node count, and the <code>numa_node</code> / <code>local_cpus</code> of the GPU and NIC. In <code>nvidia-smi topo -m</code>, read the CPU Affinity column.</li>
+<li><b>Bandwidth.</b> Pinned should beat pageable, and the pinned call's "CPU blocked" time should be microseconds while the pageable one is about the whole transfer. That's criterion #1 on your own hardware.</li>
+<li><b>Placement.</b> Pageable throughput follows the CPU core, and pinned throughput doesn't. On a multi-socket server with <code>numactl</code>, cross-node memory also cuts pinned bandwidth, because the DMA has to cross the socket link.</li>
+</ol>
+<h3>Expected output</h3>
+<div class="cols">
+<div><h4>x86 + RTX 4090 <span class="tag">measured on your box</span></h4>
+<pre><code>page size: 4096   cache line: 64
+P-cores = 0-15   E-cores = 16-31
+NUMA: node0 only
+GPU0 CPU Affinity 0-31, NUMA 0
+PCIe gen current 1 / max 4, x16  (idle)
+
+  size | H2D pg  H2D pin | D2H pg  D2H pin
+  256M |  16.0    20.2   |  14.9    19.2
+CPU blocked: pageable 16.5 ms (124%)
+             pinned   0.002 ms (0%)
+
+place: P-core  pageable 16.4  pinned 20.3
+       E-core  pageable  8.0  pinned 20.2</code></pre>
+<p style="font-size:.88rem">Pinned ≈20 GB/s is ~63% of the Gen4 x16 peak. The usual range is 20–26 GB/s depending on platform. The E-core halves pageable throughput and leaves pinned untouched, because only the pageable path runs a CPU memcpy.</p>
+</div>
+<div><h4>DGX Spark <span class="tag">measured on DGX Spark (DGX OS 7.3.1)</span></h4>
+<pre><code>page size: 4096   cache line: 64
+A725 = 0-4, 10-14  (capacity 718/731)
+X925 = 5-9, 15-19  (capacity 997-1024)
+NUMA: node0 only (121.7 GiB, CPUs 0-19)
+GPU0 CPU Affinity 0-19, NUMA 0
+integrated (shares DRAM with CPU): True
+
+  size | H2D pg  H2D pin | D2H pg  D2H pin
+  256M |  60.5    59.4   |  60.6    59.8
+    1G |  60.4    59.7   |  60.3    59.7
+CPU blocked: pageable 4.4 ms (98%)
+             pinned   0.003 ms (0%)
+
+place: X925 (19) pageable 59.3 pinned 59.1
+       A725 (0)  pageable 59.6 pinned 58.8</code></pre>
+<p style="font-size:.88rem">Three surprises. (1) The copy engine tops out at ≈60 GB/s, well under the 273 GB/s DRAM, while SMs reading the same memory directly reach 231–262 GB/s (<code>m5_coherent.cu</code>). On the Spark, <code>cudaMemcpy</code> is the slow way to move bytes. (2) Pageable equals pinned, on a big core and on a little core alike, so the driver isn't doing a CPU memcpy into a staging buffer. (3) The pageable call still holds the CPU thread for the whole copy (98%), so <code>non_blocking=True</code> on a pageable tensor still isn't asynchronous.</p>
+<div class="unsure">The drill doesn't show <i>how</i> the driver services pageable copies without staging (presumably the copy engine reads the pages directly through ATS). On this unit the ConnectX-7 didn't enumerate: its two PCIe root ports are present with nothing behind them, so the CX-7 netdev names (from community reports) and the 2-port layout are still unverified here.</div>
+</div>
+</div>
+<div class="stack"><b>Where this shows up in your stack</b>
+Keep the topology output from a multi-GPU node handy. When an NCCL job is slow, the first question is "did each rank get its local NIC, with GDR on?", and you answer it from <code>topo -m</code> plus the <code>NCCL_DEBUG=INFO</code> init log.</div>
+</section>
+
+<!-- ======================================================= quiz -->
+<section id="check">
+<h2><span class="num">?</span>Self-check</h2>
+<p>Answer out loud first, then open the answer.</p>
+<details class="q"><summary>You wrote <code>x.to("cuda", non_blocking=True)</code>, but nsys shows the copy and the next kernel running back to back with no overlap, and the CPU stuck in <code>cudaMemcpyAsync</code>. What's happening, and what's the fix? <span class="crit">criterion #1</span></summary>
+<div class="a"><code>x</code> is in pageable memory. The copy engine can only DMA from pinned memory with stable physical addresses, so the driver has your calling thread memcpy the data, chunk by chunk, into its own pinned staging buffers. The call returns only after the last chunk is staged, so it's effectively synchronous, and bandwidth is capped by one core's memcpy plus a second pass through DRAM. Fix: put the source in pinned memory (<code>pin_memory=True</code> in the DataLoader, <code>x.pin_memory()</code> once for reused buffers, or allocate with <code>torch.empty(..., pin_memory=True)</code>). Then the call only enqueues a DMA descriptor and returns in microseconds.</div></details>
+
+<details class="q"><summary>Why can't the GPU's copy engine just DMA straight from a <code>malloc</code>'d buffer?</summary>
+<div class="a">A DMA engine works on bus/physical addresses that must stay valid for the whole transfer. Pageable memory doesn't guarantee that: its pages might not be allocated yet, the kernel can migrate or swap them at any time, and the IOMMU mapping for the device might not exist. Pinning locks the pages in place and maps them for the device ahead of time. (Module 2 covers the page-table side of this.)</div></details>
+
+<details class="q"><summary>On an 8-GPU, 2-socket node, NCCL all-reduce across nodes is 40% slower than on an identical node. <code>topo -m</code> shows GPU4↔mlx5_2 as <code>SYS</code> on the slow node and <code>PIX</code> on the good one. Explain. <span class="crit">criterion #3</span></summary>
+<div class="a">On the slow node, GPU4's traffic to its NIC crosses the socket interconnect, so it isn't the NIC on the same PCIe switch. Either the NIC is cabled/slotted differently, or the rank-to-NIC mapping was forced (e.g. by <code>NCCL_IB_HCA</code>) to a far NIC. At <code>SYS</code> distance NCCL normally disables GPUDirect RDMA and stages through host memory instead. Every byte then crosses UPI, which is shared and slower than local PCIe, and bounces through DRAM. If the proxy thread and bounce buffers also sit on the far socket, you pay for remote memory too. Fixes: correct the hardware or NIC mapping, let NCCL auto-select, and bind each rank's CPU and memory to its GPU's NUMA node.</div></details>
+
+<details class="q"><summary>Two threads each increment their own counter, <code>ctr[0]</code> and <code>ctr[1]</code>, in a shared <code>int64</code> array. Adding the second thread makes it slower. Why?</summary>
+<div class="a">False sharing. Both counters sit in the same 64-byte cache line, so every write by one core invalidates the other core's copy, and the line bounces between their caches (tens of ns per bounce, more across clusters or sockets). Pad each counter to its own 64-byte line, or keep per-thread counters in registers or locals and combine them at the end.</div></details>
+
+<details class="q"><summary>A 70B-parameter bf16 checkpoint is 140 GB. Roughly how long, at best, to get it from one Gen4 NVMe into GPUs, versus from a warm page cache over PCIe Gen5 x16? What does that suggest?</summary>
+<div class="a">NVMe at ~7 GB/s: ~20 s just to read the disk, and that's the bottleneck. From page cache at ~50 GB/s achieved per Gen5 x16 link: ~3 s if one GPU had to take all of it, less when 8 GPUs load their own shards in parallel over separate links. So cold loads are disk-bound (use multiple drives, or keep checkpoints in page cache or tmpfs on the node), warm loads are PCIe-bound, and extra CPU copies (pickle → Python buffers) push both toward CPU-bound. Module 4 covers dropping caches to measure each case.</div></details>
+
+<details class="q"><summary>On DGX Spark, what does "H2D bandwidth" actually measure, and what else is competing for the same resource?</summary>
+<div class="a">Both source and destination are in the same LPDDR5x pool, so an "H2D" copy reads and writes the same DRAM, and the 273 GB/s is shared between the read and the write. In practice the copy engine is the limit: the drill measures ≈60 GB/s for cudaMemcpy on the Spark, while SMs reading the same memory in place reach 231–262 GB/s. CPU threads (data prep, tokenization, the Python process) and the GPU's own kernels draw from that same 273 GB/s. On Spark the question isn't PCIe speed. It's whether a copy is needed at all, since the GPU can access system memory coherently over C2C (Module 2: ATS, HMM).</div></details>
+
+<details class="q"><summary>Why does NCCL's proxy thread busy-poll the NIC's completion queue instead of waiting for an interrupt, and what does that imply for how you place threads?</summary>
+<div class="a">An interrupt plus a thread wake-up costs microseconds, and more if the core was asleep or busy. Spinning on a completion entry in memory reacts in about the time it takes a cache line to change. For latency-bound collectives, those microseconds are a big fraction of the operation. The price is a dedicated core: if the scheduler puts a DataLoader worker or another rank on that core, the proxy gets descheduled and latency spikes. Keep proxy and launch threads on reserved, NUMA-local cores (Module 3).</div></details>
+</section>
+
+<div class="done-box">
+  <button class="btn primary" id="doneBtn">Mark Module 1 complete</button>
+  <span id="doneMsg" style="color:var(--mute);font-size:.9rem">Progress is saved in this browser and shown on the index page.</span>
+</div>
+
+<!-- ======================================================= sources -->
+<section id="sources">
+<h2><span class="num">§</span>Sources</h2>
+<ul class="sources">
+<li>NVIDIA, <a href="https://docs.nvidia.com/dgx/dgx-spark/hardware.html">DGX Spark Hardware Overview</a>: 20 Arm cores (10× X925 + 10× A725), 128 GB LPDDR5x, 256-bit, 273 GB/s, 6,144 CUDA cores, two copy engines, ConnectX-7, 140 W SoC TDP.</li>
+<li>NVIDIA / MediaTek, <a href="https://www.hc2025.hotchips.org/assets/program/conference/day2/21_nvidia_skende_final.pdf">GB10 at Hot Chips 2025</a>: S-die + G-die, 2×10-core clusters with 16 MB L3 each, 16 MB system-level cache, ~600 GB/s aggregate C2C, 24 MB GPU L2, hardware CPU↔GPU coherence, ATS through GMMU + SMMU, PCIe Gen5 x8 to the CX-7 NIC; GH200/GB200 C2C "up to 900 GB/s"; NVLink 5 at 1,800 GB/s.</li>
+<li>NVIDIA, <a href="https://docs.nvidia.com/dgx/dgx-spark-porting-guide/latest/porting/cuda.html">DGX Spark Porting Guide: CUDA</a>: GPUDirect RDMA not supported; use <code>cudaHostAlloc</code> + <code>ibv_reg_mr</code>.</li>
+<li>NVIDIA, <a href="https://docs.nvidia.com/dgx/dgx-spark-porting-guide/latest/optimization.html">DGX Spark Optimization</a>: UMA, <code>cudaMemGetInfo</code> under-reporting, two clusters of P/E cores, avoiding cross-cluster cache-line sharing.</li>
+<li>ServeTheHome, <a href="https://www.servethehome.com/the-nvidia-gb10-connectx-7-200gbe-networking-is-really-different/">The NVIDIA GB10 ConnectX-7 200GbE networking is really different</a>, and the NVIDIA developer forum thread <a href="https://forums.developer.nvidia.com/t/connectx-7-nic-in-dgx-spark/350417">ConnectX-7 NIC in DGX Spark</a>: CX-7 runs as two PCIe Gen5 x4 links, each netdev pair maps to one port, and ~100 Gb/s per x4 link (community measurements).</li>
+<li>NVIDIA, <a href="https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html">CUDA Runtime API: API synchronization behavior</a>: pageable vs pinned memcpy semantics and staging buffers.</li>
+<li>NVIDIA, <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html">NCCL environment variables</a>: <code>NCCL_P2P_LEVEL</code> / <code>NCCL_NET_GDR_LEVEL</code> path types, <code>NCCL_NET_GDR_READ</code>, <code>NCCL_IGNORE_CPU_AFFINITY</code>.</li>
+<li>Intel, i9-13900K (Raptor Lake) specs: 8P+16E cores, 36 MB L3, 2 MB L2 per P-core, PCIe 5.0/4.0. Cache and core layout confirmed with <code>lscpu</code> on your box.</li>
+<li>PCI-SIG generation rates (8/16/32/64 GT/s per lane). x16 per-direction figures are computed after line encoding.</li>
+<li>Latency ballparks: Colin Scott's interactive <a href="https://colin-scott.github.io/personal_website/research/interactive_latency.html">"Latency numbers every programmer should know"</a> and <a href="https://chipsandcheese.com/">Chips and Cheese</a> microbenchmarks for recent cores and GPUs. They're rounded on purpose, so treat them as ±2×.</li>
+<li>Your measurements: <code>drills/m1_h2d_bandwidth.py</code> on the i9-13900K + RTX 4090, driver 580.178, torch 2.8.0+cu128.</li>
+</ul>
+</section>
+</main>
+</div>
+
+<script>
+(function(){
+"use strict";
+var $=function(s,r){return (r||document).querySelector(s)}, $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+
+/* ---------- theme ---------- */
+var root=document.documentElement, saved=store("osf:theme");
+if(saved)root.setAttribute("data-theme",saved);
+$("#themeBtn").onclick=function(){
+  var dark=root.getAttribute("data-theme")==="dark"||(!root.getAttribute("data-theme")&&matchMedia("(prefers-color-scheme: dark)").matches);
+  var t=dark?"light":"dark"; root.setAttribute("data-theme",t); store("osf:theme",t);
+};
+
+/* ---------- toc + progress ---------- */
+var links=$$("#toc a"), secs=links.map(function(a){return $(a.getAttribute("href"))});
+function onScroll(){
+  var h=document.documentElement, p=h.scrollTop/(h.scrollHeight-h.clientHeight||1);
+  $("#readBar").style.width=(p*100).toFixed(1)+"%";
+  var cur=0; secs.forEach(function(s,i){if(s&&s.getBoundingClientRect().top<120)cur=i});
+  links.forEach(function(a,i){a.classList.toggle("on",i===cur)});
+}
+addEventListener("scroll",onScroll,{passive:true}); onScroll();
+
+/* ---------- done ---------- */
+var KEY="osf:done:m1";
+function paintDone(){var d=store(KEY)==="1";$("#doneBtn").textContent=d?"✓ Completed: click to undo":"Mark Module 1 complete";$("#doneBtn").classList.toggle("primary",!d)}
+$("#doneBtn").onclick=function(){store(KEY,store(KEY)==="1"?"0":"1");paintDone()}; paintDone();
+
+/* ---------- generic stepper ---------- */
+function Stepper(opts){
+  var i=0, self=this;
+  this.go=function(n){i=Math.max(0,Math.min(opts.count()-1,n));opts.render(i);paint()};
+  function paint(){
+    var n=opts.count(), d=$(opts.dots); d.innerHTML="";
+    for(var k=0;k<n;k++){var e=document.createElement("i");if(k===i)e.className="on";e.title="Step "+(k+1);(function(k){e.onclick=function(){self.go(k)}})(k);d.appendChild(e)}
+    $(opts.count_el).textContent="step "+(i+1)+" / "+n;
+    $(opts.prev).disabled=i===0; $(opts.next).disabled=i===n-1;
+  }
+  $(opts.prev).onclick=function(){self.go(i-1)}; $(opts.next).onclick=function(){self.go(i+1)}; $(opts.reset).onclick=function(){self.go(0)};
+  var fig=$(opts.fig); fig.tabIndex=0;
+  fig.addEventListener("keydown",function(e){if(e.target.tagName==="SELECT")return;if(e.key==="ArrowRight"){self.go(i+1);e.preventDefault()}if(e.key==="ArrowLeft"){self.go(i-1);e.preventDefault()}});
+  this.cur=function(){return i};
+}
+function stateGrid(el,obj,prev){
+  el.innerHTML=Object.keys(obj).map(function(k){var c=prev&&prev[k]!==undefined&&prev[k]!==obj[k]?" class=\"chg\"":"";return "<div"+c+"><span>"+k+"</span><b>"+obj[k]+"</b></div>"}).join("");
+}
+
+/* ======================= Fig 2: latency explorer ======================= */
+var LAT=[
+ {g:"mem",n:"L1 cache hit",v:1,note:"≈4–5 cycles. Your hot loop's working set should live here; 48 KB per P-core on the 13900K."},
+ {g:"mem",n:"L2 cache hit",v:4,note:"≈15 cycles. 2 MB per P-core (13900K); Spark's X925 cores also have a private L2."},
+ {g:"mem",n:"L3 / last-level cache",v:15,note:"Shared by a cluster of cores. Spark has one L3 per 10-core cluster (sysfs: 8 MB and 16 MB) plus a 16 MB system cache that also serves the GPU."},
+ {g:"mem",n:"Cache line bounce (core↔core)",v:50,note:"Moving a contended line from another core's cache. This is the cost of false sharing and of lock hand-offs; worse across clusters and sockets."},
+ {g:"mem",n:"DRAM, local node",v:90,note:"≈80–110 ns on a desktop/server CPU. One DRAM miss costs as much time as hundreds of simple instructions."},
+ {g:"mem",n:"DRAM, remote NUMA node",v:140,note:"Through UPI / Infinity Fabric: ≈1.5–2× local. Not applicable on your single-node boxes; very real on 2-socket DGX/HGX hosts."},
+ {g:"mem",n:"GPU global memory load (L2 miss)",v:600,note:"≈0.5–0.8 µs from an SM to HBM/GDDR. GPUs hide it by running thousands of warps, not with big caches."},
+ {g:"io", n:"PCIe round trip (CPU reads device reg)",v:1000,note:"≈0.5–1 µs. Why drivers avoid reading MMIO registers on the fast path and post writes instead (doorbells)."},
+ {g:"os", n:"Syscall (simple, e.g. getppid)",v:200,note:"≈0.1–0.5 µs including kernel entry/exit; Spectre/Meltdown mitigations raise it. Module 3."},
+ {g:"os", n:"Minor page fault",v:1000,note:"Kernel allocates/zeros or maps an already-cached page: ≈0.5–2 µs. Happens on first touch of every page of a fresh buffer. Module 2."},
+ {g:"os", n:"cudaLaunchKernel (CPU side)",v:3000,note:"≈2–5 µs of host CPU per launch. A 1,000-kernel step spends milliseconds just launching; CUDA graphs batch these. Module 3."},
+ {g:"os", n:"Context switch / thread wake-up",v:4000,note:"≈2–5 µs direct cost, plus cache and TLB refill afterwards. Interrupt-driven waits pay this; busy-polling avoids it."},
+ {g:"io", n:"RDMA small message, same rack",v:2500,note:"≈1–3 µs one-way, NIC to NIC, no kernel on the path. Module 4."},
+ {g:"io", n:"TCP round trip in a datacenter",v:30000,note:"≈10–50 µs: kernel network stack on both ends, interrupts, copies. Why NCCL prefers IB/RoCE verbs over sockets. Module 4."},
+ {g:"io", n:"NVMe 4 KB random read",v:80000,note:"≈50–100 µs for a single queued read on a fast Gen4 drive. Deep queues raise throughput, not single-read latency."},
+ {g:"os", n:"Major page fault (from NVMe)",v:100000,note:"A fault that must read the page from disk: device latency plus kernel overhead. A cold mmap'd checkpoint takes thousands of these. Module 2."},
+ {g:"io", n:"HDD seek",v:5e6,note:"≈5 ms. Listed only as a scale anchor."},
+ {g:"io", n:"Cross-continent network RTT",v:7e7,note:"≈70 ms. Speed of light in fibre."}
+];
+LAT.sort(function(a,b){return a.v-b.v});
+var latMode="lat", latScale="real", latSel=-1;
+function fmtNs(ns){
+  if(latScale==="human"){var s=ns; // 1 ns -> 1 s
+    if(s<60)return s.toFixed(0)+" s"; if(s<3600)return (s/60).toFixed(s<600?1:0)+" min"; if(s<86400)return (s/3600).toFixed(1)+" h";
+    if(s<86400*365)return (s/86400).toFixed(s<864000?1:0)+" days"; return (s/86400/365).toFixed(1)+" years";}
+  if(ns<1000)return ns+" ns"; if(ns<1e6)return (ns/1e3).toFixed(ns<1e4?1:0)+" µs"; if(ns<1e9)return (ns/1e6).toFixed(ns<1e7?1:0)+" ms"; return (ns/1e9).toFixed(1)+" s";
+}
+var LMIN=0, LMAX=8; // log10 ns
+function renderLat(){
+  var rows=$("#latRows"); rows.innerHTML="";
+  LAT.forEach(function(r,i){
+    var w=(Math.log10(r.v)-LMIN)/(LMAX-LMIN)*100;
+    var d=document.createElement("div"); d.className="lat-row grp-"+r.g+(i===latSel?" sel":"");
+    d.innerHTML='<div class="lab" title="'+r.n+'">'+r.n+'</div><div class="trk"><div class="fill" style="width:'+Math.max(1.5,w).toFixed(1)+'%"></div></div><div class="val">'+fmtNs(r.v)+'</div>';
+    d.onclick=function(){latSel=i;renderLat();var h=latScale==="human"?" In human terms: <b>"+fmtNs(r.v)+"</b>.":"";$("#latNote").innerHTML="<h4>"+r.n+" · ≈"+(latScale==="human"?fmtNs(r.v)+" (scaled)":fmtNs(r.v))+"</h4><p>"+r.note+h+"</p>"};
+    rows.appendChild(d);
+  });
+  var t=$("#latTicks"); t.innerHTML="";
+  var labs=latScale==="human"?["1s","10s","2m","17m","3h","1d","12d","4mo","3y"]:["1 ns","10","100","1 µs","10","100","1 ms","10","100 ms"];
+  for(var k=0;k<=8;k++){var s=document.createElement("span");s.style.left=(k/8*100)+"%";s.textContent=labs[k];t.appendChild(s)}
+}
+var BW=[
+ {n:"Gen4 NVMe SSD (x4)",v:7,note:"One fast Gen4 drive, sequential read. Cold checkpoint loads are bound here unless you stripe drives."},
+ {n:"Spark ConnectX-7 (200 Gb/s)",v:25,note:"Two Gen5 x4 links behind it; one link alone tops out near ~100 Gb/s. Typical datacenter NICs are 400 Gb/s = 50 GB/s."},
+ {n:"PCIe 4.0 x16 (your 4090)",v:32,note:"Theoretical per direction; your pinned H2D measured ≈20 GB/s."},
+ {n:"PCIe 5.0 x16 (H100/B200 host)",v:63,note:"Theoretical per direction; ~50 GB/s achievable pinned."},
+ {n:"DDR5 desktop, 2 channels",v:90,note:"DDR5-5600 × 2 channels × 8 B ≈ 90 GB/s peak, shared by all cores. Servers have 8–12 channels per socket."},
+ {n:"Spark LPDDR5x (shared CPU+GPU)",v:273,note:"The single memory budget for both CPU and GPU on GB10."},
+ {n:"GB10 NVLink-C2C (aggregate)",v:600,note:"Faster than the DRAM behind it, so on Spark the link is not the bottleneck."},
+ {n:"RTX 4090 GDDR6X",v:1008,note:"The 4090's own memory: ~30× its PCIe link."},
+ {n:"Blackwell NVLink 5 (per GPU, total)",v:1800,note:"1.8 TB/s per GPU across all links, both directions combined (~900 GB/s each way)."},
+ {n:"H100 SXM HBM3",v:3350,note:"For scale. B200's HBM3e is ~8 TB/s."}
+];
+function renderBw(){
+  var gb=parseFloat($("#bwSize").value), max=3350, rows=$("#bwRows"); rows.innerHTML="";
+  BW.forEach(function(r){
+    var s=gb/r.v, ts=s<1e-3?(s*1e6).toFixed(0)+" µs":s<1?(s*1e3).toFixed(s<0.01?2:0)+" ms":s.toFixed(s<10?2:1)+" s";
+    var d=document.createElement("div"); d.className="bw-row";
+    d.innerHTML='<div class="lab">'+r.n+'</div><div class="trk"><div class="fill" style="width:'+Math.max(.6,r.v/max*100).toFixed(2)+'%"></div></div><div class="val">'+(r.v>=1000?(r.v/1000).toFixed(2)+" TB/s":r.v+" GB/s")+'<br><span style="color:var(--mute)">'+ts+'</span></div>';
+    d.style.cursor="pointer"; d.onclick=function(){$("#latNote").innerHTML="<h4>"+r.n+"</h4><p>"+r.note+" Moving "+$("#bwSize").selectedOptions[0].text+" takes at least <b>"+ts+"</b>.</p>"};
+    rows.appendChild(d);
+  });
+}
+$$("#latMode button").forEach(function(b){b.onclick=function(){latMode=b.dataset.m;$$("#latMode button").forEach(function(x){x.classList.toggle("on",x===b)});
+  $("#latPane").style.display=latMode==="lat"?"":"none";$("#bwPane").style.display=latMode==="bw"?"":"none";
+  $("#latScale").style.display=latMode==="lat"?"":"none";$("#bwSizeWrap").style.display=latMode==="bw"?"":"none";
+  $("#latNote").innerHTML=latMode==="lat"?"<h4>Click any row</h4><p>Each row has a note on where the number comes from and why it matters.</p>":"<h4>Pick a size, click a link</h4><p>The 140 GB option is a 70B bf16 checkpoint: compare the NVMe row with the PCIe rows.</p>";}});
+$$("#latScale button").forEach(function(b){b.onclick=function(){latScale=b.dataset.s;$$("#latScale button").forEach(function(x){x.classList.toggle("on",x===b)});renderLat()}});
+$("#bwSize").onchange=renderBw;
+renderLat(); renderBw();
+
+/* ======================= Fig 4: pageable vs pinned ======================= */
+var CP={
+ pg:[
+  {t:"App calls cudaMemcpyAsync(dst, src, 8 MB, H2D, stream)",d:"src came from malloc (a regular torch CPU tensor), so it's pageable. The driver can't give the copy engine addresses for it: the pages may not be resident and could move.",cpu:[[0,6,"API","cpu"]],dma:[],sm:[],src:8,stg:0,dst:0,st:{"CPU thread":"in API call","bytes moved by CPU":"0 MB","bytes by DMA":"0 MB","DRAM passes":"0"}},
+  {t:"CPU copies chunk 1 into a pinned staging buffer",d:"Your calling thread does a plain memcpy from the pageable source into a driver-owned pinned buffer. That's a full read and write through host DRAM, on one core.",cpu:[[0,6,"API","cpu"],[6,22,"memcpy c1","cpu"]],dma:[],sm:[],src:8,stg:2,dst:0,st:{"CPU thread":"memcpy","bytes moved by CPU":"2 MB","bytes by DMA":"0 MB","DRAM passes":"1"}},
+  {t:"Copy engine DMAs chunk 1 while the CPU stages chunk 2",d:"Now the pipeline runs: staging buffer → PCIe → GPU memory by DMA, while the CPU fills the next buffer. Throughput is min(CPU memcpy, PCIe), and the two stages must hand off cleanly.",cpu:[[0,6,"API","cpu"],[6,22,"memcpy c1","cpu"],[22,38,"memcpy c2","cpu"]],dma:[[22,36,"DMA c1","dma"]],sm:[],src:8,stg:4,dst:2,st:{"CPU thread":"memcpy","bytes moved by CPU":"4 MB","bytes by DMA":"2 MB","DRAM passes":"1 (+DMA read)"}},
+  {t:"…until the last chunk is staged",d:"The thread can't leave the API call while bytes remain to be staged. That's why a pageable \"async\" copy blocks the host for about the whole transfer: you measured ≈120% of the pinned DMA time on the 4090.",cpu:[[0,6,"API","cpu"],[6,22,"memcpy c1","cpu"],[22,38,"memcpy c2","cpu"],[38,54,"memcpy c3","cpu"],[54,70,"memcpy c4","cpu"]],dma:[[22,36,"DMA c1","dma"],[38,52,"DMA c2","dma"],[54,68,"DMA c3","dma"]],sm:[],src:8,stg:8,dst:6,st:{"CPU thread":"memcpy","bytes moved by CPU":"8 MB","bytes by DMA":"6 MB","DRAM passes":"2 total"}},
+  {t:"Call returns: now the CPU can launch the kernel",d:"Only now does your Python code reach the next line, model(x). The kernel launch, and everything behind it, was delayed by the whole staging time. Overlap is lost.",cpu:[[0,6,"API","cpu"],[6,22,"memcpy c1","cpu"],[22,38,"memcpy c2","cpu"],[38,54,"memcpy c3","cpu"],[54,70,"memcpy c4","cpu"],[70,76,"launch","cpu"]],dma:[[22,36,"DMA c1","dma"],[38,52,"DMA c2","dma"],[54,68,"DMA c3","dma"],[70,84,"DMA c4","dma"]],sm:[[84,100,"kernel","krn"]],src:8,stg:8,dst:8,st:{"CPU thread":"free (late)","bytes moved by CPU":"8 MB","bytes by DMA":"8 MB","DRAM passes":"2 total"}}
+ ],
+ pn:[
+  {t:"App calls cudaMemcpyAsync(dst, src, 8 MB, H2D, stream)",d:"src came from cudaHostAlloc / pin_memory(). Its pages are locked and already mapped for the device, so the driver knows their bus addresses.",cpu:[[0,4,"API","cpu"]],dma:[],sm:[],src:8,stg:-1,dst:0,st:{"CPU thread":"in API call","bytes moved by CPU":"0 MB","bytes by DMA":"0 MB","DRAM passes":"0"}},
+  {t:"Driver writes one copy descriptor and returns",d:"The command goes into the stream's queue, and the call returns in microseconds (≈3 µs measured). No byte has moved yet.",cpu:[[0,4,"API","cpu"]],dma:[[4,10,"queued","wait"]],sm:[],src:8,stg:-1,dst:0,st:{"CPU thread":"free","bytes moved by CPU":"0 MB","bytes by DMA":"0 MB","DRAM passes":"0"}},
+  {t:"Copy engine pulls the bytes over PCIe by DMA",d:"The GPU's copy engine reads host DRAM directly at link speed (≈20 GB/s measured on your 4090). No CPU core is involved, and the bytes cross DRAM once.",cpu:[[0,4,"API","cpu"],[4,10,"launch","cpu"]],dma:[[6,62,"DMA 8 MB (one stream of reads)","dma"]],sm:[],src:8,stg:-1,dst:5,st:{"CPU thread":"launching kernel","bytes moved by CPU":"0 MB","bytes by DMA":"5 MB","DRAM passes":"1 (DMA read)"}},
+  {t:"Meanwhile the CPU queues more work",d:"The kernel launch went into the same stream, so it waits for the copy on the GPU, not on the CPU. Put the next batch's copy on a second stream and it overlaps with this batch's compute.",cpu:[[0,4,"API","cpu"],[4,10,"launch","cpu"],[10,40,"next batch prep…","cpu"]],dma:[[6,62,"DMA 8 MB","dma"]],sm:[],src:8,stg:-1,dst:7,st:{"CPU thread":"doing useful work","bytes moved by CPU":"0 MB","bytes by DMA":"7 MB","DRAM passes":"1"}},
+  {t:"Copy completes, kernel starts at once",d:"Stream order guarantees the kernel sees the data. Compare the green block's start with the pageable case: the CPU was free the whole time, and the GPU started sooner.",cpu:[[0,4,"API","cpu"],[4,10,"launch","cpu"],[10,40,"next batch prep…","cpu"]],dma:[[6,62,"DMA 8 MB","dma"]],sm:[[62,78,"kernel","krn"]],src:8,stg:-1,dst:8,st:{"CPU thread":"free","bytes moved by CPU":"0 MB","bytes by DMA":"8 MB","DRAM passes":"1"}}
+ ]
+};
+var cpMode="pg", cpPrev=null;
+function blocks(el,list){el.innerHTML=list.map(function(b){return '<div class="blk '+b[3]+'" style="left:'+b[0]+'%;width:'+(b[1]-b[0])+'%" title="'+b[2]+'">'+b[2]+'</div>'}).join("")}
+function cells(el,n,filled,cls){var h="";for(var k=0;k<n;k++)h+='<i class="'+(k<filled?cls:"")+'"></i>';el.innerHTML=h}
+var cpStep=new Stepper({fig:"#cp",prev:"#cpPrev",next:"#cpNext",reset:"#cpReset",dots:"#cpDots",count_el:"#cpCount",count:function(){return CP[cpMode].length},
+ render:function(i){var s=CP[cpMode][i];
+  blocks($("#cpCpu"),s.cpu);blocks($("#cpDma"),s.dma);blocks($("#cpSm"),s.sm);
+  cells($("#cpSrc"),8,s.src,cpMode==="pn"?"d":"f");
+  var stg=$("#cpStg"); if(s.stg<0){stg.innerHTML='<span style="font-size:.8rem;color:var(--mute)">not used: source is already pinned</span>'}else cells(stg,8,s.stg,"f");
+  cells($("#cpDst"),8,s.dst,"d");
+  $("#cpNarr").innerHTML="<h4>"+s.t+"</h4><p>"+s.d+"</p>";
+  stateGrid($("#cpState"),s.st,cpPrev); cpPrev=s.st;}});
+$$("#cpMode button").forEach(function(b){b.onclick=function(){cpMode=b.dataset.m;cpPrev=null;$$("#cpMode button").forEach(function(x){x.classList.toggle("on",x===b)});cpStep.go(0)}});
+cpStep.go(0);
+
+/* ======================= Fig 5: data path ======================= */
+var DPN={ // node layout (shared); labels vary by mode
+ nvme:{x:15,y:30},pc:{x:165,y:30},ub:{x:315,y:30},pin:{x:465,y:30},
+ rc:{x:315,y:140},gpu:{x:465,y:140},peer:{x:615,y:140},nic:{x:615,y:30}
+};
+var DPE={nvme_pc:["nvme","pc"],pc_ub:["pc","ub"],ub_pin:["ub","pin"],pc_pin:["pc","pin"],pin_rc:["pin","rc"],rc_gpu:["rc","gpu"],gpu_peer:["gpu","peer"],gpu_nic:["gpu","nic"],pin_nic:["pin","nic"]};
+var DP={
+ x86:{labels:{nvme:["NVMe SSD","Gen4 x4"],pc:["Page cache","host DDR5"],ub:["User buffer","pageable (torch)"],pin:["Pinned buffer","cudaHostAlloc"],rc:["Root complex","PCIe 4.0 x16"],gpu:["GPU memory","24 GB GDDR6X"],peer:["(no peer)","single GPU"],nic:["2.5 GbE NIC","kernel TCP"]},
+  hide:["peer"],
+  steps:[
+   {on:["nvme"],e:[],t:"Start: a checkpoint shard on NVMe",w:"none",d:"torch.load(\"shard.pt\") or a DataLoader reading a file. Nothing in memory yet.",st:{"DRAM passes":0,"CPU copies":0,"DMA hops":0,"Bottleneck so far":"–"}},
+   {on:["nvme","pc"],e:["nvme_pc"],t:"NVMe → page cache (DMA)",w:"dma",d:"The kernel asks the NVMe controller to DMA the blocks into page-cache pages in DRAM. No CPU copy, but an interrupt fires per completion batch. Cold read ≈7 GB/s at best.",st:{"DRAM passes":1,"CPU copies":0,"DMA hops":1,"Bottleneck so far":"NVMe ≈7 GB/s"}},
+   {on:["pc","ub"],e:["pc_ub"],t:"Page cache → user buffer (CPU copy)",w:"cpu",d:"read() copies from kernel pages into your process's buffer, and unpickling may copy again into tensor storage. With mmap (safetensors) this step disappears: the tensor's pages are the page-cache pages (Module 2).",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":1,"Bottleneck so far":"NVMe / 1 core memcpy"}},
+   {on:["ub","pin"],e:["ub_pin"],t:"User buffer → pinned buffer (CPU copy)",w:"cpu",d:"Either the driver's hidden staging (pageable .cuda()), or DataLoader's pin_memory thread copying into a pinned tensor. Either way, a CPU core rewrites every byte. Skip it by reading directly into pinned memory.",st:{"DRAM passes":3,"CPU copies":2,"DMA hops":1,"Bottleneck so far":"CPU memcpy ≈10–20 GB/s"}},
+   {on:["pin","rc","gpu"],e:["pin_rc","rc_gpu"],t:"Pinned → GPU over PCIe (copy-engine DMA)",w:"dma",d:"The copy engine reads host DRAM through the root complex at ≈20–26 GB/s (Gen4 x16). This is the narrowest pipe in the box, and this hop is what pin_memory + non_blocking overlaps with compute.",st:{"DRAM passes":3,"CPU copies":2,"DMA hops":2,"Bottleneck so far":"PCIe ≈20 GB/s"}},
+   {on:["gpu","nic"],e:["gpu_nic"],t:"Sending results off the box: GPU → NIC",w:"cpu",d:"No RDMA NIC here, so data goes back to host memory (D2H), then through the kernel's TCP stack with more CPU copies. Every hop above happens again in reverse. Module 4 contrasts this with RDMA.",st:{"DRAM passes":"5+","CPU copies":"3+","DMA hops":4,"Bottleneck so far":"2.5 GbE ≈0.3 GB/s"}}
+  ]},
+ spark:{labels:{nvme:["NVMe SSD","PCIe, on S-die"],pc:["Page cache","LPDDR5x"],ub:["User buffer","LPDDR5x"],pin:["Pinned buffer","LPDDR5x"],rc:["NVLink-C2C","coherent, ≈600 GB/s"],gpu:["cudaMalloc mem","LPDDR5x (same pool)"],peer:["(no peer)","1 GPU per Spark"],nic:["ConnectX-7","2× Gen5 x4, 200 Gb/s"]},
+  hide:["peer"],
+  steps:[
+   {on:["nvme"],e:[],t:"Start: a checkpoint shard on NVMe",w:"none",d:"Same file and same code. The difference is that every box from here on is the same physical DRAM.",st:{"DRAM passes":0,"CPU copies":0,"DMA hops":0,"Bottleneck so far":"–"}},
+   {on:["nvme","pc"],e:["nvme_pc"],t:"NVMe → page cache (DMA)",w:"dma",d:"Same as x86: the NVMe controller DMAs into page-cache pages. On Spark the page cache shares the 128 GB with the GPU, which is why cudaMemGetInfo under-reports: cached file pages are reclaimable, but CUDA doesn't count them.",st:{"DRAM passes":1,"CPU copies":0,"DMA hops":1,"Bottleneck so far":"NVMe"}},
+   {on:["pc","ub"],e:["pc_ub"],t:"Page cache → user buffer (CPU copy)",w:"cpu",d:"read() still copies. It's worth avoiding even more here: the copy spends LPDDR5x bandwidth (273 GB/s, shared) that a running GPU job also needs.",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":1,"Bottleneck so far":"NVMe / CPU"}},
+   {on:["ub","pin"],e:["ub_pin"],t:"Pageable → pinned staging: skipped on Spark",w:"none",d:"If you call .cuda() on a pageable tensor, the CUDA copy path still applies. Measured on the Spark: it doesn't stage through a CPU memcpy. Pageable and pinned copies both run at ≈59 GB/s, on a big core or a little one. The call still blocks the CPU thread until the copy finishes, so it isn't async.",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":1,"Bottleneck so far":"NVMe / CPU"}},
+   {on:["pin","rc","gpu"],e:["pin_rc","rc_gpu"],t:"\"H2D\": copy engine, DRAM → DRAM",w:"dma",d:"cudaMemcpy moves bytes from one LPDDR5x region to another. There's no PCIe, but it still reads and writes DRAM, and the copy engine runs at only ≈60 GB/s (measured), far below the 273 GB/s DRAM. Alternative: since the GPU accesses system memory coherently (ATS via C2C), a kernel can read the host tensor in place without copying (Module 2: HMM, cudaHostRegister, managed memory).",st:{"DRAM passes":3,"CPU copies":1,"DMA hops":2,"Bottleneck so far":"copy engine ≈60 GB/s"}},
+   {on:["pin","nic"],e:["pin_nic"],t:"To the 2nd Spark: NIC DMAs from cudaHostAlloc memory",w:"dma",d:"GPUDirect RDMA isn't supported on Spark: cudaMalloc memory isn't accessible to PCIe devices. NVIDIA's guidance is to allocate NCCL/verbs buffers with cudaHostAlloc and register them with the NIC. The CX-7 sits behind two Gen5 x4 links (≈100 Gb/s each), so drive both to reach 200 Gb/s.",st:{"DRAM passes":"3+","CPU copies":1,"DMA hops":3,"Bottleneck so far":"CX-7 ≈25 GB/s"}}
+  ]},
+ dc:{labels:{nvme:["NVMe (×N)","Gen4/5 x4 each"],pc:["Page cache","host DDR5, NUMA 0"],ub:["User buffer","pageable"],pin:["Pinned buffer","NUMA-local!"],rc:["PCIe switch","Gen5 x16 per GPU"],gpu:["GPU HBM","H100/B200"],peer:["Peer GPU","NVLink/NVSwitch"],nic:["RDMA NIC","400 Gb/s, same switch"]},
+  hide:[],
+  steps:[
+   {on:["nvme"],e:[],t:"Start: shards on local NVMe (or a parallel filesystem)",w:"none",d:"Each rank loads its own shard. 8 ranks in parallel only help if the drives and PCIe paths are separate.",st:{"DRAM passes":0,"CPU copies":0,"DMA hops":0,"Bottleneck so far":"–"}},
+   {on:["nvme","pc"],e:["nvme_pc"],t:"NVMe → page cache (DMA)",w:"dma",d:"The pages land on the NUMA node of whichever CPU handled the read (first touch). If rank 6 (GPU on socket 1) reads with a thread on socket 0, its data now lives on the wrong node.",st:{"DRAM passes":1,"CPU copies":0,"DMA hops":1,"Bottleneck so far":"NVMe"}},
+   {on:["pc","pin"],e:["pc_pin"],t:"Into a NUMA-local pinned buffer (one CPU copy)",w:"cpu",d:"A well-built loader reads directly into pinned memory allocated on the GPU's own NUMA node, skipping the pageable step. (GPUDirect Storage goes further and DMAs NVMe straight into GPU memory; Module 4.)",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":1,"Bottleneck so far":"NVMe / CPU"}},
+   {on:["pin","rc","gpu"],e:["pin_rc","rc_gpu"],t:"Pinned → HBM through the PCIe switch",w:"dma",d:"Gen5 x16 at ≈50 GB/s achieved. If the pinned buffer was on the far socket, this DMA also crosses UPI. That's why the launcher should bind each rank's memory to its GPU's node.",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":2,"Bottleneck so far":"PCIe Gen5 ≈50 GB/s"}},
+   {on:["gpu","peer"],e:["gpu_peer"],t:"Intra-node collective: GPU ↔ GPU over NVLink",w:"dma",d:"All-reduce/all-gather within the node goes over NVLink (hundreds of GB/s per direction) and never touches PCIe or host DRAM. That's the NV# in topo -m.",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":3,"Bottleneck so far":"–"}},
+   {on:["gpu","rc","nic"],e:["gpu_nic"],t:"Inter-node: NIC reads HBM directly (GPUDirect RDMA)",w:"dma",d:"With the NIC on the same PCIe switch (PIX), the NIC DMAs straight from GPU memory. Host DRAM and the CPU are bypassed. If they were SYS-distant, NCCL would bounce through a host buffer instead, adding two DRAM passes and a socket crossing (criterion #3).",st:{"DRAM passes":2,"CPU copies":1,"DMA hops":4,"Bottleneck so far":"NIC 50 GB/s"}}
+  ]}
+};
+var dpMode="x86", dpPrev=null;
+function dpDraw(){
+  var m=DP[dpMode], svg=$("#dpSvg"), W=130, H=56, h="";
+  function c(n){return {x:DPN[n].x+W/2,y:DPN[n].y+H/2}}
+  Object.keys(DPE).forEach(function(k){var a=DPN[DPE[k][0]],b=DPN[DPE[k][1]],ca=c(DPE[k][0]),cb=c(DPE[k][1]),d;
+    if(k==="pc_pin"){d="M"+ca.x+" "+a.y+" V14 H"+cb.x+" V"+b.y}
+    else if(a.y===b.y){d="M"+(a.x<b.x?a.x+W:a.x)+" "+ca.y+" L"+(a.x<b.x?b.x:b.x+W)+" "+cb.y}
+    else if(a.x===b.x){d="M"+ca.x+" "+(a.y+H)+" L"+cb.x+" "+b.y}
+    else if(k==="pin_rc"){d="M"+ca.x+" "+(a.y+H)+" V105 H"+cb.x+" V"+b.y}
+    else {d="M"+ca.x+" "+(a.y+(a.y<b.y?H:0))+" V"+(a.y<b.y?(a.y+H+b.y)/2:(b.y+H+a.y)/2)+" H"+cb.x+" V"+(a.y<b.y?b.y:b.y+H)}
+    h+='<path class="edge" id="e_'+k+'" d="'+d+'"/>';});
+  Object.keys(DPN).forEach(function(n){var p=DPN[n],l=m.labels[n];
+    h+='<g class="node" id="n_'+n+'"><rect x="'+p.x+'" y="'+p.y+'" width="'+W+'" height="'+H+'" rx="7"/><text x="'+(p.x+W/2)+'" y="'+(p.y+24)+'" text-anchor="middle" font-size="13" font-weight="600">'+l[0]+'</text><text x="'+(p.x+W/2)+'" y="'+(p.y+42)+'" text-anchor="middle" font-size="11" class="t-mute">'+l[1]+'</text></g>';});
+  h+='<text x="15" y="238" font-size="11" class="t-mute" id="dpFoot"></text>';
+  svg.innerHTML=h;
+}
+var dpStep=new Stepper({fig:"#dp",prev:"#dpPrev",next:"#dpNext",reset:"#dpReset",dots:"#dpDots",count_el:"#dpCount",count:function(){return DP[dpMode].steps.length},
+ render:function(i){
+  var m=DP[dpMode], s=m.steps[i], seenN={}, seenE={};
+  for(var k=0;k<i;k++){m.steps[k].on.forEach(function(n){seenN[n]=1});m.steps[k].e.forEach(function(e){seenE[e]=1})}
+  var used={}; m.steps.forEach(function(st){st.e.forEach(function(e){used[e]=1})});
+  Object.keys(DPN).forEach(function(n){var g=$("#n_"+n);g.setAttribute("class","node"+(s.on.indexOf(n)>=0?" on":seenN[n]?" done":"")+(m.hide.indexOf(n)>=0?" off":""))});
+  Object.keys(DPE).forEach(function(e){var p=$("#e_"+e);p.setAttribute("class","edge"+(s.e.indexOf(e)>=0?" on":seenE[e]?" done":"")+(used[e]?"":" off"))});
+  var who={cpu:'<span class="who cpu">CPU core copies</span>',dma:'<span class="who dma">DMA engine</span>',none:'<span class="who none">no data movement</span>'}[s.w];
+  $("#dpNarr").innerHTML="<h4>"+who+s.t+"</h4><p>"+s.d+"</p>";
+  stateGrid($("#dpState"),s.st,dpPrev); dpPrev=s.st;
+ }});
+$$("#dpMode button").forEach(function(b){b.onclick=function(){dpMode=b.dataset.m;dpPrev=null;$$("#dpMode button").forEach(function(x){x.classList.toggle("on",x===b)});dpDraw();dpStep.go(0)}});
+dpDraw(); dpStep.go(0);
+})();
+</script>
+</body>
+</html>

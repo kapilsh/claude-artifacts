@@ -2,6 +2,14 @@ const BASE = import.meta.env.BASE_URL
 
 const ARTIFACTS = [
   {
+    slug: 'ai-systems-notes',
+    title: 'OS Fundamentals for AI Systems',
+    description: 'Four interactive modules covering the host side of distributed training: machine anatomy, virtual memory, CPU scheduling, and I/O + networking + containers. Each module has interactive steppers, a drill you run on real hardware, and a self-check.',
+    tags: ['OS', 'Systems', 'Distributed Training', 'CUDA'],
+    kind: 'notes',
+    href: `${BASE}ai-systems-notes/`,
+  },
+  {
     slug: 'pytorch-allocator-map',
     title: 'PyTorch Allocator Map',
     description: "A reference map of the PyTorch CUDA memory allocator: block states, pool kinds, segment lifecycle, and the caching allocator's internal bookkeeping — annotated for navigating real allocator traces.",

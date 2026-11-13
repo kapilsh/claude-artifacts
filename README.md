@@ -8,6 +8,7 @@ Deployed to [kapilsharma.github.io/claude-artifacts](https://kapilsharma.github.
 
 | Artifact | Kind | Description |
 |---|---|---|
+| [OS Fundamentals for AI Systems](public/ai-systems-notes/) | Notes | Machine anatomy, virtual memory, CPU scheduling, I/O + networking (4 interactive modules) |
 | [PyTorch Allocator Map](public/pytorch-allocator-map/index.html) | Reference | Block states, pool kinds, segment lifecycle, and caching allocator internals |
 
 ## Development

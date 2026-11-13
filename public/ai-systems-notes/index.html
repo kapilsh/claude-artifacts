@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OS fundamentals for AI systems engineers</title>
+<style>
+
+/* ---------- theme ---------- */
+:root{
+  --bg:#f6f4ee; --paper:#fffdf8; --ink:#1d1f23; --ink2:#4a4e57; --mute:#7b808a;
+  --line:#d9d4c7; --line2:#e9e5da; --accent:#c2410c; --accent-soft:#fbe6da;
+  --cool:#0e7490; --cool-soft:#d8eef2; --ok:#3f7d20; --ok-soft:#e3f0d8; --warn:#a16207; --warn-soft:#f8ecc9;
+  --code-bg:#f0ece2; --shadow:0 1px 0 rgba(0,0,0,.04), 0 6px 24px -12px rgba(0,0,0,.18);
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+:root[data-theme="dark"]{
+  --bg:#121417; --paper:#191c20; --ink:#e7e5df; --ink2:#b4b6bb; --mute:#858a93;
+  --line:#33373e; --line2:#262a30; --accent:#ff8a4c; --accent-soft:#3a2418;
+  --cool:#4cc3d9; --cool-soft:#14323a; --ok:#8fcf6a; --ok-soft:#1f3218; --warn:#e8b54a; --warn-soft:#382d12;
+  --code-bg:#20242a; --shadow:0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121417; --paper:#191c20; --ink:#e7e5df; --ink2:#b4b6bb; --mute:#858a93;
+    --line:#33373e; --line2:#262a30; --accent:#ff8a4c; --accent-soft:#3a2418;
+    --cool:#4cc3d9; --cool-soft:#14323a; --ok:#8fcf6a; --ok-soft:#1f3218; --warn:#e8b54a; --warn-soft:#382d12;
+    --code-bg:#20242a; --shadow:0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16.5px/1.62 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--cool)} a:hover{color:var(--accent)}
+code,kbd,pre{font-family:var(--mono);font-size:.88em}
+code{background:var(--code-bg);padding:.08em .35em;border-radius:4px;overflow-wrap:anywhere}
+pre code{overflow-wrap:normal}
+pre{background:var(--code-bg);padding:12px 14px;border-radius:8px;overflow-x:auto;line-height:1.45;border:1px solid var(--line2)}
+pre code{background:none;padding:0}
+h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+h1{font-size:2.1rem;margin:.2em 0 .3em}
+h2{font-size:1.45rem;margin:0 0 .5em;display:flex;gap:.6em;align-items:baseline}
+h2 .num{font:600 .8rem var(--mono);color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 6px;transform:translateY(-3px)}
+h3{font-size:1.05rem;margin:1.4em 0 .4em}
+p{margin:.55em 0}
+ul,ol{padding-left:1.25em} li{margin:.2em 0}
+table{border-collapse:collapse;width:100%;font-size:.92em;margin:.6em 0}
+th,td{border-bottom:1px solid var(--line2);padding:6px 8px;text-align:left;vertical-align:top}
+th{font-weight:600;color:var(--ink2);border-bottom-color:var(--line)}
+td.n,th.n{text-align:right;font-family:var(--mono);white-space:nowrap}
+.wrap-table{overflow-x:auto}
+
+/* ---------- layout ---------- */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line2)}
+.top .in{max-width:1180px;margin:0 auto;padding:8px 20px;display:flex;align-items:center;gap:14px;font-size:.88rem}
+.top a{text-decoration:none;color:var(--ink2)} .top .sp{flex:1}
+.top .bar{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
+button{font:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:6px;padding:5px 11px;font-size:.86rem}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn[disabled]{opacity:.4;cursor:default}
+.grid{max-width:1180px;margin:0 auto;padding:0 20px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:40px}
+nav.toc{position:sticky;top:56px;align-self:start;padding-top:36px;font-size:.84rem;max-height:calc(100vh - 60px);overflow:auto}
+nav.toc a{display:block;color:var(--mute);text-decoration:none;padding:3px 0 3px 10px;border-left:2px solid var(--line2)}
+nav.toc a.on{color:var(--ink);border-left-color:var(--accent)}
+main{min-width:0;max-width:800px;padding:30px 0 80px}
+@media (max-width:900px){.grid{grid-template-columns:1fr} nav.toc{display:none}}
+.kicker{font:600 .78rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lede{font-size:1.08rem;color:var(--ink2)}
+.meta{font-size:.86rem;color:var(--mute);display:flex;gap:16px;flex-wrap:wrap}
+section{padding:34px 0 10px;border-top:1px solid var(--line2);margin-top:28px;scroll-margin-top:50px}
+
+/* ---------- callouts ---------- */
+.stack{border:1px solid var(--line);border-left:4px solid var(--cool);background:var(--paper);border-radius:8px;padding:10px 14px;margin:1em 0;box-shadow:var(--shadow)}
+.stack>b:first-child{display:block;font:600 .74rem var(--mono);text-transform:uppercase;letter-spacing:.07em;color:var(--cool);margin-bottom:2px}
+.why{border-left:3px solid var(--accent);padding:2px 0 2px 12px;margin:.9em 0;color:var(--ink2)}
+.why b{color:var(--ink)}
+.unsure{background:var(--warn-soft);border:1px dashed var(--warn);border-radius:6px;padding:6px 10px;font-size:.9em;margin:.7em 0}
+.unsure::before{content:"Unverified · ";font:600 .74rem var(--mono);color:var(--warn);text-transform:uppercase;letter-spacing:.05em}
+.tag{font:600 .7rem var(--mono);padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+
+/* ---------- figures ---------- */
+figure{margin:1.3em 0;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:var(--shadow)}
+figcaption{font-size:.84rem;color:var(--mute);margin-top:8px}
+figure .ftitle{font:600 .78rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--ink2);margin-bottom:8px;display:flex;gap:8px;align-items:center}
+figure .ftitle .live{color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 5px;font-size:.66rem}
+svg{max-width:100%;height:auto;display:block}
+svg text{font-family:var(--sans);fill:var(--ink)}
+svg .t-mono{font-family:var(--mono)}
+svg .t-mute{fill:var(--mute)} svg .t-acc{fill:var(--accent)} svg .t-cool{fill:var(--cool)}
+svg .box{fill:var(--paper);stroke:var(--line);stroke-width:1.2}
+svg .box2{fill:var(--bg);stroke:var(--line);stroke-width:1}
+svg .boxa{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4}
+svg .boxc{fill:var(--cool-soft);stroke:var(--cool);stroke-width:1.4}
+svg .ln{stroke:var(--ink2);stroke-width:1.4;fill:none}
+svg .lnm{stroke:var(--mute);stroke-width:1;fill:none;stroke-dasharray:3 3}
+svg .lna{stroke:var(--accent);stroke-width:2.4;fill:none}
+svg .lnc{stroke:var(--cool);stroke-width:2.4;fill:none}
+svg .fat{stroke-width:6}
+
+/* ---------- stepper ---------- */
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.ctrl .dots{display:flex;gap:4px;flex-wrap:wrap;margin-left:6px}
+.ctrl .dots i{width:9px;height:9px;border-radius:50%;background:var(--line);cursor:pointer;display:block}
+.ctrl .dots i.on{background:var(--accent)}
+.ctrl .count{font:.8rem var(--mono);color:var(--mute);margin-left:auto}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:var(--paper);color:var(--ink2);padding:5px 11px;font-size:.84rem;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--ink);color:var(--paper)}
+.narr{min-height:5.5em;margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line2)}
+.narr h4{margin:0 0 4px;font-size:.98rem}
+.narr p{margin:0;font-size:.93rem;color:var(--ink2)}
+.state{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px}
+.state div{border:1px solid var(--line2);border-radius:6px;padding:6px 9px;background:var(--paper)}
+.state div span{display:block;font:600 .68rem var(--mono);text-transform:uppercase;color:var(--mute);letter-spacing:.05em}
+.state div b{font:600 .95rem var(--mono)}
+.state div.chg{border-color:var(--accent);background:var(--accent-soft)}
+
+/* latency explorer */
+.lat-row{display:grid;grid-template-columns:minmax(150px,230px) 1fr 92px;gap:10px;align-items:center;padding:3px 0;cursor:pointer;border-radius:4px}
+.lat-row:hover{background:var(--bg)}
+.lat-row .lab{font-size:.86rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lat-row .trk{position:relative;height:14px;background:var(--line2);border-radius:3px}
+.lat-row .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--cool);transition:width .35s}
+.lat-row.grp-mem .fill{background:var(--cool)} .lat-row.grp-os .fill{background:var(--warn)} .lat-row.grp-io .fill{background:var(--accent)}
+.lat-row .val{font:.8rem var(--mono);text-align:right}
+.lat-row.sel{background:var(--accent-soft)}
+.axis{display:grid;grid-template-columns:minmax(150px,230px) 1fr 92px;gap:10px;font:.7rem var(--mono);color:var(--mute)}
+.axis .ticks{position:relative;height:16px}
+.axis .ticks span{position:absolute;transform:translateX(-50%)}
+.legend{display:flex;gap:14px;font-size:.8rem;color:var(--ink2);flex-wrap:wrap;margin:6px 0}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.bw-row{display:grid;grid-template-columns:minmax(150px,230px) 1fr 100px;gap:10px;align-items:center;padding:3px 0}
+.bw-row .lab{font-size:.86rem}
+.bw-row .trk{height:14px;background:var(--line2);border-radius:3px;position:relative}
+.bw-row .fill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:3px;transition:width .35s}
+.bw-row .val{font:.8rem var(--mono);text-align:right}
+@media (max-width:560px){.lat-row,.axis,.bw-row{grid-template-columns:110px 1fr 70px}}
+
+/* copy timeline */
+.tl{display:grid;grid-template-columns:130px 1fr;gap:6px 10px;align-items:center;margin-top:8px}
+.tl .lane{font:.78rem var(--mono);color:var(--ink2);text-align:right}
+.tl .trk{position:relative;height:24px;background:var(--bg);border:1px solid var(--line2);border-radius:4px;overflow:hidden}
+.tl .blk{position:absolute;top:2px;bottom:2px;border-radius:3px;font:.68rem var(--mono);color:#fff;display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;transition:opacity .25s}
+.tl .blk.cpu{background:var(--warn)} .tl .blk.dma{background:var(--cool)} .tl .blk.krn{background:var(--ok)} .tl .blk.wait{background:repeating-linear-gradient(45deg,var(--line),var(--line) 4px,transparent 4px,transparent 8px);color:var(--ink2)}
+.tl .blk.ghost{opacity:.15}
+.mem-cells{display:flex;gap:3px;flex-wrap:wrap}
+.mem-cells i{width:16px;height:16px;border-radius:3px;border:1px solid var(--line);background:var(--paper);display:block}
+.mem-cells i.f{background:var(--warn)} .mem-cells i.d{background:var(--cool)}
+
+/* data path */
+#dp svg .node rect{fill:var(--paper);stroke:var(--line);stroke-width:1.2;transition:all .25s}
+#dp svg .node.on rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+#dp svg .node.done rect{fill:var(--cool-soft);stroke:var(--cool)}
+#dp svg .node.off{opacity:.28}
+#dp svg .edge{stroke:var(--line);stroke-width:2;fill:none;transition:all .25s}
+#dp svg .edge.on{stroke:var(--accent);stroke-width:3.5;stroke-dasharray:8 6;animation:flow .8s linear infinite}
+#dp svg .edge.done{stroke:var(--cool);stroke-width:2.5}
+#dp svg .edge.off{opacity:.2}
+@keyframes flow{to{stroke-dashoffset:-14}}
+@media (prefers-reduced-motion:reduce){#dp svg .edge.on{animation:none}}
+.who{display:inline-block;font:600 .72rem var(--mono);padding:1px 6px;border-radius:4px;margin-right:6px}
+.who.cpu{background:var(--warn-soft);color:var(--warn)} .who.dma{background:var(--cool-soft);color:var(--cool)} .who.none{background:var(--ok-soft);color:var(--ok)}
+
+/* quiz + drill */
+details.q{border:1px solid var(--line);border-radius:8px;background:var(--paper);margin:10px 0;padding:0 14px}
+details.q summary{cursor:pointer;padding:11px 0;font-weight:500;list-style:none}
+details.q summary::-webkit-details-marker{display:none}
+details.q summary::before{content:"Q";font:600 .72rem var(--mono);color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 5px;margin-right:9px}
+details.q[open] summary::before{content:"A";background:var(--accent);color:#fff}
+details.q .a{padding:0 0 12px;color:var(--ink2);border-top:1px dashed var(--line2);padding-top:8px}
+details.q .crit{font:600 .7rem var(--mono);color:var(--cool);margin-left:6px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:700px){.cols{grid-template-columns:1fr}}
+.cols>div{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--paper);min-width:0}
+.cols h4{margin:0 0 6px;font-size:.92rem}
+.done-box{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--paper);margin-top:26px}
+.sources{font-size:.86rem;color:var(--ink2)} .sources li{margin:.35em 0}
+.kbd-hint{font-size:.75rem;color:var(--mute)}
+
+.wrap{max-width:960px;margin:0 auto;padding:30px 20px 80px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:14px;margin-top:18px}
+.card{display:block;text-decoration:none;color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:var(--paper);box-shadow:var(--shadow);position:relative;transition:border-color .15s,transform .15s}
+.card:hover{border-color:var(--accent);transform:translateY(-1px);color:var(--ink)}
+.card .n{font:600 .74rem var(--mono);color:var(--accent);letter-spacing:.06em}
+.card h3{margin:.25em 0 .35em;font-size:1.15rem}
+.card p{margin:0;font-size:.9rem;color:var(--ink2)}
+.card .meta2{margin-top:10px;font:.76rem var(--mono);color:var(--mute)}
+.card .st{position:absolute;top:14px;right:14px;font:600 .7rem var(--mono);padding:2px 7px;border-radius:4px;border:1px solid var(--line);color:var(--mute)}
+.card.done{border-color:var(--ok)}
+.card.done .st{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
+.prog{height:8px;border-radius:5px;background:var(--line2);overflow:hidden;margin:10px 0 4px}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .4s}
+.crit{counter-reset:c;list-style:none;padding:0}
+.crit li{counter-increment:c;display:grid;grid-template-columns:30px 1fr;gap:8px;padding:9px 0;border-bottom:1px solid var(--line2)}
+.crit li::before{content:counter(c);font:600 .8rem var(--mono);color:var(--paper);background:var(--accent);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center}
+.crit .where{font-size:.84rem;color:var(--mute)}
+.crit .where a{margin-right:8px}
+</style>
+</head>
+<body data-mod="index">
+<div class="top"><div class="in">
+  <b style="font-size:.9rem">OS fundamentals · for AI systems</b><span class="sp"></span>
+  <button class="btn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+</div><div class="bar" id="readBar"></div></div>
+
+<div class="wrap">
+<div class="kicker">A two-weekend course · AI systems notes</div>
+<h1>The machine and the kernel under your GPUs</h1>
+<p class="lede">Four modules on the host side of distributed training and inference.: how the box is wired, what virtual memory does to your bytes, how the kernel schedules the threads that feed the GPU, and how I/O, networks and containers fail. Each module takes ≈35–45 minutes to read, has interactive diagrams you can step through, and ends with a drill you can run on any NVIDIA machine, from an RTX 4090 workstation or a DGX Spark to an 8×H100 node.</p>
+
+<div class="prog" aria-label="course progress"><i id="progBar"></i></div>
+<div class="meta"><span id="progTxt">0 of 4 modules complete</span><button class="btn" id="resetBtn" style="padding:2px 8px;font-size:.78rem">reset progress</button></div>
+
+<h2 style="margin-top:22px;font-size:1.05rem"><span class="num">I</span>One machine</h2>
+<div class="cards">
+  <a class="card" href="m1-machine.html" data-k="m1"><span class="st">todo</span>
+    <div class="n">MODULE 1 · WEEKEND 1</div><h3>How the machine is built</h3>
+    <p>Cores and cache lines, latency orders of magnitude, NUMA, PCIe topology, NVLink and NVLink-C2C, DMA and pinned memory, interrupts vs polling.</p>
+    <div class="meta2">≈35 min · latency explorer · pageable-vs-pinned stepper · data-path stepper</div></a>
+  <a class="card" href="m2-virtual-memory.html" data-k="m2"><span class="st">todo</span>
+    <div class="n">MODULE 2 · WEEKEND 1</div><h3>Virtual memory</h3>
+    <p>Page tables and TLBs, minor/major faults, THP, mmap and the page cache, COW, pinning and the IOMMU, CUDA VMM, expandable segments, SymmetricMemory, UVM/HMM/ATS.</p>
+    <div class="meta2">≈45 min · page-walk stepper · fault-handler stepper · fork+COW visualizer</div></a>
+  <a class="card" href="m3-cpu-scheduling.html" data-k="m3"><span class="st">todo</span>
+    <div class="n">MODULE 3 · WEEKEND 2</div><h3>The CPU side: processes, threads, scheduling</h3>
+    <p>Syscalls and context switches, futexes, fork vs spawn (and CUDA), EEVDF, affinity, isolcpus, IRQs, launch jitter, CUDA graphs.</p>
+    <div class="meta2">≈35 min · syscall/register stepper · launch-jitter timeline</div></a>
+  <a class="card" href="m4-io-net-containers.html" data-k="m4"><span class="st">todo</span>
+    <div class="n">MODULE 4 · WEEKEND 2</div><h3>I/O, networking, containers, observability</h3>
+    <p>Page cache vs O_DIRECT, io_uring, GPUDirect Storage, TCP vs RDMA, memory registration, cgroups and namespaces, container outages, perf/eBPF/nsys.</p>
+    <div class="meta2">≈40 min · TCP vs RDMA stepper · "debug this container" quiz · final self-check</div></a>
+</div>
+
+<section style="border-top:0;margin-top:20px">
+<h2><span class="num">✓</span>What you should be able to explain afterwards</h2>
+<ol class="crit">
+  <li><div>Why pageable-memory copies are slower and can't be truly async.<div class="where"><a href="m1-machine.html#dma">M1 §6</a><a href="m2-virtual-memory.html#pin">M2 §8</a><a href="drills/m1_h2d_bandwidth.py">drill</a></div></div></li>
+  <li><div>What happens step by step on a page fault, and what a TLB miss costs.<div class="where"><a href="m2-virtual-memory.html#tlb">M2 §3</a><a href="m2-virtual-memory.html#faults">M2 §4</a></div></div></li>
+  <li><div>Why GPU and NIC NUMA placement matters for NCCL.<div class="where"><a href="m1-machine.html#numa">M1 §3</a><a href="m1-machine.html#pcie">M1 §4</a><a href="m4-io-net-containers.html#reg">M4 §5</a></div></div></li>
+  <li><div>Why DataLoader workers seem to "leak" memory.<div class="where"><a href="m2-virtual-memory.html#cow">M2 §7</a><a href="m3-cpu-scheduling.html#fork">M3 §5</a><a href="drills/m3_cow_leak.py">drill</a></div></div></li>
+  <li><div>What mmap buys you for checkpoint loading.<div class="where"><a href="m2-virtual-memory.html#mmap">M2 §6</a><a href="drills/m2_vm.py">drill</a></div></div></li>
+  <li><div>Why RDMA needs pinned, registered memory.<div class="where"><a href="m2-virtual-memory.html#pin">M2 §8</a><a href="m4-io-net-containers.html#net">M4 §4</a><a href="m4-io-net-containers.html#reg">M4 §5</a></div></div></li>
+  <li><div>What usually breaks distributed training inside containers.<div class="where"><a href="m4-io-net-containers.html#containers">M4 §6</a><a href="m4-io-net-containers.html#outages">M4 §7</a><a href="drills/m4_container_check.sh">drill</a></div></div></li>
+</ol>
+<p style="font-size:.9rem;color:var(--ink2)">The <a href="m4-io-net-containers.html#check">final self-check</a> at the end of Module 4 asks all seven.</p>
+</section>
+
+<section>
+<h2><span class="num">D</span>Drills</h2>
+<p>All drills are in <code>drills/</code>. They need Python 3 with PyTorch (CUDA), <code>nvidia-smi</code>, and optionally <code>sudo apt install hwloc numactl sysstat</code>. Run each one on both machines and keep the output: the pages compare the two.</p>
+<div class="wrap-table"><table>
+<tr><th>Module</th><th>Command</th><th>What it shows</th></tr>
+<tr><td>1</td><td><code>bash drills/m1_machine.sh</code></td><td>topology, NUMA, PCIe links, GPU/NIC affinity; pinned vs pageable bandwidth; big vs small core (or cross-NUMA)</td></tr>
+<tr><td>2</td><td><code>bash drills/m2_vm.sh</code></td><td>page size, THP, CUDA unified-memory attributes; read vs mmap faults, cold vs warm; THP fault counts</td></tr>
+<tr><td>3</td><td><code>bash drills/m3_cpu.sh</code></td><td>strace of a training step; DataLoader COW growth (list vs numpy); launch jitter quiet / noisy / pinned / CUDA graph</td></tr>
+<tr><td>4</td><td><code>bash drills/m4_io.sh</code><br><code>docker run … sh /d/m4_container_check.sh</code><br><code>bash drills/m4_60s.sh PID</code></td><td>page cache and O_DIRECT; container limits that break training; the 60-second checklist</td></tr>
+<tr><td>any</td><td><code>bash drills/m5_rack.sh</code></td><td>coherence class (ATS, NUMA config, fabric handles), copy engine vs SMs reading CPU memory, NUMA placement</td></tr>
+<tr><td>any</td><td><code>bash drills/report.sh</code></td><td>one-page profile of any machine, written to <code>results/&lt;host&gt;.md</code>: headline numbers for comparing machines</td></tr>
+</table></div>
+<p>Get the drills with <code>git clone https://github.com/kapilsh/ai-systems-notes</code>, or download single files from the links in each module. <code>m5_coherent.cu</code> needs a CUDA toolkit (<code>nvcc</code>).</p>
+<div class="unsure">"x86 + RTX 4090" results were measured on an i9-13900K + RTX 4090 workstation, and "DGX Spark" results on a DGX Spark (DGX OS 7.3.1). The 8×H100 columns are predictions from NVIDIA's documentation, marked as such until measured.</div>
+</section>
+
+<section>
+<h2><span class="num">↺</span>Suggested schedule</h2>
+<div class="cols">
+<div><h4>Weekend 1</h4><p style="margin:0;font-size:.92rem">Module 1 + drill on both boxes (≈1 h). Module 2, the longest and most important, + drill (≈1.25 h). Re-do the page-walk and COW steppers until you can narrate them without looking.</p></div>
+<div><h4>Weekend 2</h4><p style="margin:0;font-size:.92rem">Module 3 + drill (≈1 h). Module 4 + drill (≈1.25 h). Finish with the final self-check, out loud, without notes. Then run <code>drills/report.sh</code> on every machine you can reach and compare.</p></div>
+</div>
+<p style="margin-top:28px;font-size:.85rem;color:var(--mute)">Part of <a href="https://www.kapilsharma.dev/">kapilsharma.dev</a> · source and drills on <a href="https://github.com/kapilsh/ai-systems-notes">GitHub</a>.</p>
+</section>
+</div>
+
+<script>
+var $=function(s,r){return (r||document).querySelector(s)}, $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+(function(){
+var root=document.documentElement, saved=store("osf:theme");
+if(saved)root.setAttribute("data-theme",saved);
+$("#themeBtn").onclick=function(){
+  var dark=root.getAttribute("data-theme")==="dark"||(!root.getAttribute("data-theme")&&matchMedia("(prefers-color-scheme: dark)").matches);
+  var t=dark?"light":"dark"; root.setAttribute("data-theme",t); store("osf:theme",t);
+};
+var links=$$("#toc a"), secs=links.map(function(a){return $(a.getAttribute("href"))});
+function onScroll(){
+  var h=document.documentElement, p=h.scrollTop/(h.scrollHeight-h.clientHeight||1);
+  $("#readBar").style.width=(p*100).toFixed(1)+"%";
+  var cur=0; secs.forEach(function(s,i){if(s&&s.getBoundingClientRect().top<120)cur=i});
+  links.forEach(function(a,i){a.classList.toggle("on",i===cur)});
+}
+addEventListener("scroll",onScroll,{passive:true}); onScroll();
+if(!$("#doneBtn"))return;
+var mod=document.body.getAttribute("data-mod"), KEY="osf:done:"+mod, n=mod.slice(1);
+function paintDone(){var d=store(KEY)==="1";$("#doneBtn").textContent=d?"✓ Completed: click to undo":"Mark Module "+n+" complete";$("#doneBtn").classList.toggle("primary",!d)}
+$("#doneBtn").onclick=function(){store(KEY,store(KEY)==="1"?"0":"1");paintDone()}; paintDone();
+})();
+function Stepper(opts){
+  var i=0, self=this;
+  this.go=function(n){i=Math.max(0,Math.min(opts.count()-1,n));opts.render(i);paint()};
+  function paint(){
+    var n=opts.count(), d=$(opts.dots); d.innerHTML="";
+    for(var k=0;k<n;k++){var e=document.createElement("i");if(k===i)e.className="on";e.title="Step "+(k+1);(function(k){e.onclick=function(){self.go(k)}})(k);d.appendChild(e)}
+    $(opts.count_el).textContent="step "+(i+1)+" / "+n;
+    $(opts.prev).disabled=i===0; $(opts.next).disabled=i===n-1;
+  }
+  $(opts.prev).onclick=function(){self.go(i-1)}; $(opts.next).onclick=function(){self.go(i+1)}; $(opts.reset).onclick=function(){self.go(0)};
+  var fig=$(opts.fig); fig.tabIndex=0;
+  fig.addEventListener("keydown",function(e){if(/SELECT|INPUT/.test(e.target.tagName))return;if(e.key==="ArrowRight"){self.go(i+1);e.preventDefault()}if(e.key==="ArrowLeft"){self.go(i-1);e.preventDefault()}});
+  this.cur=function(){return i};
+}
+function stateGrid(el,obj,prev){
+  el.innerHTML=Object.keys(obj).map(function(k){var c=prev&&prev[k]!==undefined&&prev[k]!==obj[k]?" class=\"chg\"":"";return "<div"+c+"><span>"+k+"</span><b>"+obj[k]+"</b></div>"}).join("");
+}
+function seg(sel,cb){$$(sel+" button").forEach(function(b){b.onclick=function(){$$(sel+" button").forEach(function(x){x.classList.toggle("on",x===b)});cb(b.dataset.m)}})}
+
+</script>
+<script>
+(function(){
+  function paint(){
+    var n=0;
+    $$(".card").forEach(function(c){var d=store("osf:done:"+c.dataset.k)==="1";if(d)n++;c.classList.toggle("done",d);c.querySelector(".st").textContent=d?"✓ done":"todo"});
+    var tot=$$(".card").length;
+    $("#progBar").style.width=(n/tot*100)+"%";
+    $("#progTxt").textContent=n+" of "+tot+" modules complete";
+  }
+  $("#resetBtn").onclick=function(){if(confirm("Clear progress for all modules?")){["m1","m2","m3","m4"].forEach(function(k){store("osf:done:"+k,"0")});paint()}};
+  addEventListener("pageshow",paint); addEventListener("storage",paint); paint();
+})();
+</script>
+</body>
+</html>
