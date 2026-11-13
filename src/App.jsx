@@ -1,87 +1,95 @@
+import { useEffect, useState } from 'react'
+
 const BASE = import.meta.env.BASE_URL
 
 const ARTIFACTS = [
   {
     slug: 'ai-systems-notes',
+    kind: 'NOTES · OS FUNDAMENTALS',
     title: 'OS Fundamentals for AI Systems',
-    description: 'Four interactive modules covering the host side of distributed training: machine anatomy, virtual memory, CPU scheduling, and I/O + networking + containers. Each module has interactive steppers, a drill you run on real hardware, and a self-check.',
+    description: 'Four interactive modules on the host side of distributed training: machine anatomy, virtual memory, CPU scheduling, and I/O + networking + containers. Each module has interactive steppers, a drill you run on real hardware, and a self-check.',
     tags: ['OS', 'Systems', 'Distributed Training', 'CUDA'],
-    kind: 'notes',
     href: `${BASE}ai-systems-notes/`,
   },
   {
     slug: 'pytorch-allocator-map',
+    kind: 'REFERENCE · PYTORCH INTERNALS',
     title: 'PyTorch Allocator Map',
     description: "A reference map of the PyTorch CUDA memory allocator: block states, pool kinds, segment lifecycle, and the caching allocator's internal bookkeeping — annotated for navigating real allocator traces.",
     tags: ['PyTorch', 'CUDA', 'Memory'],
-    kind: 'reference',
     href: `${BASE}pytorch-allocator-map/`,
+  },
+  {
+    slug: 'comm-compute-fusion',
+    kind: 'REFERENCE · DISTRIBUTED TRAINING',
+    title: 'Comm–Compute Fusion Patterns',
+    description: 'A visual reference for overlapping communication and compute in distributed training: ring-allreduce bucketing, pipeline bubble reduction, tensor-parallel overlap, and the scheduling constraints that determine whether fusion actually helps.',
+    tags: ['Distributed Training', 'NCCL', 'Overlap', 'PyTorch'],
+    href: `${BASE}comm-compute-fusion/`,
   },
 ]
 
-const KIND_LABEL = {
-  reference: 'Reference',
-  notes: 'Notes',
-  tool: 'Tool',
-  writeup: 'Write-up',
-}
-
-function Mark() {
-  return (
-    <svg className="mark" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <rect width="32" height="32" rx="7" fill="#0b0f0a"/>
-      <rect x="8" y="6" width="14" height="18" rx="2" fill="#25301f"/>
-      <rect x="10.5" y="10" width="9" height="1.5" rx="0.75" fill="#76b900"/>
-      <rect x="10.5" y="13" width="6.5" height="1.5" rx="0.75" fill="#4a5e3a"/>
-      <rect x="10.5" y="16" width="8" height="1.5" rx="0.75" fill="#4a5e3a"/>
-      <rect x="10.5" y="19" width="5" height="1.5" rx="0.75" fill="#4a5e3a"/>
-      <path d="M22 20 L23.4 23.4 L26.8 24.8 L23.4 26.2 L22 29.6 L20.6 26.2 L17.2 24.8 L20.6 23.4 Z" fill="#76b900"/>
-    </svg>
-  )
-}
-
-function ArtifactCard({ artifact }) {
-  return (
-    <a className="card" href={artifact.href}>
-      <div className="card-header">
-        <span className={`kind-badge kind-${artifact.kind}`}>{KIND_LABEL[artifact.kind]}</span>
-      </div>
-      <h2 className="card-title">{artifact.title}</h2>
-      <p className="card-desc">{artifact.description}</p>
-      <div className="card-tags">
-        {artifact.tags.map((t) => (
-          <span key={t} className="tag">{t}</span>
-        ))}
-      </div>
-      <span className="card-arrow" aria-hidden="true">→</span>
-    </a>
-  )
+function store(k, v) {
+  try {
+    if (v === undefined) return localStorage.getItem(k)
+    localStorage.setItem(k, v)
+  } catch { return null }
 }
 
 export default function App() {
-  return (
-    <div className="app">
-      <header className="top">
-        <div className="brand">
-          <Mark />
-          claude<span>artifacts</span>
-        </div>
-        <p className="tagline">research notes and tools — generated from explorations in AI systems and GPU programming</p>
-      </header>
+  const [_theme, setTheme] = useState(() => store('osf:theme') || '')
 
-      <main>
-        <div className="grid">
-          {ARTIFACTS.map((a) => (
-            <ArtifactCard key={a.slug} artifact={a} />
-          ))}
+  useEffect(() => {
+    const saved = store('osf:theme')
+    if (saved) document.documentElement.setAttribute('data-theme', saved)
+  }, [])
+
+  function toggleTheme() {
+    const root = document.documentElement
+    const isDark = root.getAttribute('data-theme') === 'dark' ||
+      (!root.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches)
+    const next = isDark ? 'light' : 'dark'
+    root.setAttribute('data-theme', next)
+    store('osf:theme', next)
+    setTheme(next)
+  }
+
+  return (
+    <>
+      <div className="top">
+        <div className="in">
+          <span className="brand">claude<span>·artifacts</span></span>
+          <span className="sp" />
+          <button className="btn" onClick={toggleTheme} title="Toggle light/dark">◐ Theme</button>
         </div>
-      </main>
+      </div>
+
+      <div className="hero">
+        <div className="kicker">Research notes and tools</div>
+        <h1>AI systems artifacts</h1>
+        <p className="lede">
+          A collection of interactive references, notes, and write-ups from explorations in GPU programming, PyTorch internals, and distributed training.
+        </p>
+      </div>
+
+      <div className="grid">
+        {ARTIFACTS.map((a) => (
+          <a key={a.slug} className="card" href={a.href}>
+            <div className="n">{a.kind}</div>
+            <h3>{a.title}</h3>
+            <p>{a.description}</p>
+            <div className="tags">
+              {a.tags.map((t) => <span key={t} className="tag">{t}</span>)}
+            </div>
+          </a>
+        ))}
+      </div>
 
       <footer className="foot">
         <a href="https://kapilsharma.dev" target="_blank" rel="noopener noreferrer">kapilsharma.dev</a>
         <span className="sep">·</span>
         <a href="https://github.com/kapilsh/claude-artifacts" target="_blank" rel="noopener noreferrer">GitHub</a>
       </footer>
-    </div>
+    </>
   )
 }
