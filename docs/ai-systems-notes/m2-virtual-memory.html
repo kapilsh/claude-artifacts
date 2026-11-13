@@ -219,6 +219,22 @@ details.q .crit{font:600 .7rem var(--mono);color:var(--cool);margin-left:6px}
 </style>
 </head>
 <body data-mod="m2">
+<script>(function(){
+  var root=document.documentElement;
+  try{var t=localStorage.getItem('osf:theme');if(t)root.setAttribute('data-theme',t)}catch(e){}
+  window.addEventListener('message',function(e){
+    if(e.data&&e.data.type==='ca-theme'){
+      root.setAttribute('data-theme',e.data.value);
+      try{localStorage.setItem('osf:theme',e.data.value)}catch(e){}
+    }
+  });
+  if(window!==window.top){
+    document.addEventListener('DOMContentLoaded',function(){
+      var n=document.querySelector('.top,.ca-site-nav');
+      if(n)n.style.display='none';
+    });
+  }
+})();</script>
 <div class="top"><div class="in">
   <a href="../">← Home</a>
   <span style="color:var(--line2)">·</span>

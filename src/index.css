@@ -210,6 +210,16 @@ button { font: inherit; cursor: pointer; }
   white-space: nowrap;
 }
 
+/* ---- article iframe -------------------------------------------------- */
+
+.article-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 41px); /* 41px = nav height */
+  border: none;
+  background: var(--bg);
+}
+
 /* ---- footer ---------------------------------------------------------- */
 
 .foot {

@@ -1,4 +1,20 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<script>(function(){
+  var root=document.documentElement;
+  try{var t=localStorage.getItem('osf:theme');if(t)root.setAttribute('data-theme',t)}catch(e){}
+  window.addEventListener('message',function(e){
+    if(e.data&&e.data.type==='ca-theme'){
+      root.setAttribute('data-theme',e.data.value);
+      try{localStorage.setItem('osf:theme',e.data.value)}catch(e){}
+    }
+  });
+  if(window!==window.top){
+    document.addEventListener('DOMContentLoaded',function(){
+      var n=document.querySelector('.top,.ca-site-nav');
+      if(n)n.style.display='none';
+    });
+  }
+})();</script>
 <nav style="position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.88rem;font-family:system-ui,-apple-system,sans-serif"><a href="../" style="color:var(--muted,#586474);text-decoration:none" onmouseover="this.style.color=var(--accent,'#1E4FD0')" onmouseout="this.style.color=var(--muted,'#586474')">← Home</a><span style="color:var(--line,#D3DAE3)"> · </span><span style="color:var(--muted,#586474)">PyTorch Allocator Map</span></nav>
 <title>PyTorch Allocator Map</title>
 <meta name="claude:viewport-fit-sides" content="cover">
