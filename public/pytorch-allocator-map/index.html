@@ -1,62 +1,74 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
-<script>(function(){
-  var root=document.documentElement;
-  try{var t=localStorage.getItem('osf:theme');if(t)root.setAttribute('data-theme',t)}catch(e){}
-  window.addEventListener('message',function(e){
-    if(e.data&&e.data.type==='ca-theme'){
-      root.setAttribute('data-theme',e.data.value);
-      try{localStorage.setItem('osf:theme',e.data.value)}catch(e){}
-    }
-  });
-  if(window!==window.top){
-    document.addEventListener('DOMContentLoaded',function(){
-      var n=document.querySelector('.top,.ca-site-nav');
-      if(n)n.style.display='none';
-    });
-  }
-})();</script>
-<nav style="position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.88rem;font-family:system-ui,-apple-system,sans-serif"><a href="../" style="color:var(--muted,#586474);text-decoration:none" onmouseover="this.style.color=var(--accent,'#1E4FD0')" onmouseout="this.style.color=var(--muted,'#586474')">← Home</a><span style="color:var(--line,#D3DAE3)"> · </span><span style="color:var(--muted,#586474)">PyTorch Allocator Map</span></nav>
-<title>PyTorch Allocator Map</title>
-<meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
-<style>
-/* Layout: reference manual. Sticky section index on the left at desktop width, one reading column with wide figures; color encodes memory kind (device / pinned host / symmetric) in every diagram. */
-:root {
-  --bg: #F2F4F7;
-  --surface: #FFFFFF;
-  --sunk: #E8ECF1;
-  --ink: #131A23;
-  --muted: #586474;
-  --line: #D3DAE3;
-  --line-strong: #8C98A8;
-  --accent: #1E4FD0;
-  --accent-soft: #E2E9FB;
-  --host: #9A5A06;
-  --host-soft: #FAEEDB;
-  --dist: #0D7066;
-  --dist-soft: #DCF0EC;
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root {
+  /* ai-systems-notes design system */
+  --bg: #f6f4ee; --paper: #fffdf8; --ink: #1d1f23; --ink2: #4a4e57; --mute: #7b808a;
+  --line: #d9d4c7; --line2: #e9e5da; --accent: #c2410c; --accent-soft: #fbe6da;
+  --cool: #0e7490; --cool-soft: #d8eef2; --ok: #3f7d20; --ok-soft: #e3f0d8;
+  --code-bg: #f0ece2; --shadow: 0 1px 0 rgba(0,0,0,.04), 0 6px 24px -12px rgba(0,0,0,.18);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* content-specific — preserved */
+  --host: #9A5A06; --host-soft: #FAEEDB;
+  --dist: #0D7066; --dist-soft: #DCF0EC;
   --warn: #A23B1A;
-  --display: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
-  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* compat aliases */
+  --surface: var(--paper); --sunk: var(--bg); --muted: var(--mute);
+  --line-strong: var(--line); --body: var(--sans); --display: var(--sans);
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0D1218; --surface: #141B24; --sunk: #1A222D; --ink: #E3E8EF; --muted: #98A4B5;
-    --line: #29333F; --line-strong: #5F6B7B; --accent: #82A7FF; --accent-soft: #18233D;
-    --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #0D1218; --surface: #141B24; --sunk: #1A222D; --ink: #E3E8EF; --muted: #98A4B5;
-  --line: #29333F; --line-strong: #5F6B7B; --accent: #82A7FF; --accent-soft: #18233D;
+[data-theme="dark"] {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --cool-soft: #14323a; --ok: #8fcf6a; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
   --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
   color-scheme: dark;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --cool-soft: #14323a; --ok: #8fcf6a; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+  color-scheme: dark;
+  }
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}
+/* ── site nav ──────────────────────────────────────────────────────────── */
+.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line2)}
+.top .in{max-width:1240px;margin:0 auto;padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.875rem;font-family:var(--sans)}
+.top a{text-decoration:none;color:var(--mute);transition:color .15s}
+.top a:hover{color:var(--accent)}
+.top .sp{flex:1}
+.top .page-title{color:var(--ink2)}
+.top .sep-dot{color:var(--line)}
+.top .btn{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:6px;padding:5px 11px;font-size:.84rem;cursor:pointer;font-family:var(--sans)}
+.top .btn:hover{border-color:var(--accent)}
 
+</style></head><body>
+<div class="top"><div class="in">
+  <a href="../">← claude·artifacts</a>
+  <span class="sep-dot">·</span>
+  <span class="page-title">PyTorch Allocator Map</span>
+  <span class="sp"></span>
+  <button class="btn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+</div></div>
+<script>(function(){
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  var root=document.documentElement,saved=store('osf:theme');
+  if(saved)root.setAttribute('data-theme',saved);
+  document.addEventListener('DOMContentLoaded',function(){
+    var btn=document.getElementById('themeBtn');
+    if(!btn)return;
+    btn.onclick=function(){
+      var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme:dark)').matches);
+      var t=dark?'light':'dark';root.setAttribute('data-theme',t);store('osf:theme',t);
+    };
+  });
+})();</script>
+
+<title>PyTorch Allocator Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
 * { box-sizing: border-box; }
 body {
   background: var(--bg); color: var(--ink);

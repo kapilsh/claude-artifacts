@@ -1,57 +1,73 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
-<script>(function(){
-  var root=document.documentElement;
-  try{var t=localStorage.getItem('osf:theme');if(t)root.setAttribute('data-theme',t)}catch(e){}
-  window.addEventListener('message',function(e){
-    if(e.data&&e.data.type==='ca-theme'){
-      root.setAttribute('data-theme',e.data.value);
-      try{localStorage.setItem('osf:theme',e.data.value)}catch(e){}
-    }
-  });
-  if(window!==window.top){
-    document.addEventListener('DOMContentLoaded',function(){
-      var n=document.querySelector('.top,.ca-site-nav');
-      if(n)n.style.display='none';
-    });
-  }
-})();</script>
-<nav style="position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.88rem;font-family:system-ui,-apple-system,sans-serif"><a href="../" style="color:var(--muted,#586474);text-decoration:none" onmouseover="this.style.color=var(--accent,'#1E4FD0')" onmouseout="this.style.color=var(--muted,'#586474')">← Home</a><span style="color:var(--line,#D3DAE3)"> · </span><span style="color:var(--muted,#586474)">Comm–Compute Fusion Patterns</span></nav>
-<title>Comm–Compute Fusion Patterns</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;600;700;800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap">
-<style>
-/* Layout: one reading column (~68ch) with wider figure plates; color encodes role: compute / transfer / flag */
-:root {
-  --bg: #F3F5F7;
-  --surface: #FFFFFF;
-  --fg: #141A21;
-  --muted: #56616D;
-  --line: #C3CBD3;
-  --rule: #DCE1E6;
-  --comp: #1C5FB0;
-  --comp-bg: #DAE6F6;
-  --comm: #A85F00;
-  --comm-bg: #F6E4C6;
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root {
+  /* ai-systems-notes design system */
+  --bg: #f6f4ee; --paper: #fffdf8; --ink: #1d1f23; --ink2: #4a4e57; --mute: #7b808a;
+  --line: #d9d4c7; --line2: #e9e5da; --accent: #c2410c; --accent-soft: #fbe6da;
+  --cool: #0e7490; --cool-soft: #d8eef2; --ok: #3f7d20; --ok-soft: #e3f0d8;
+  --code-bg: #f0ece2; --shadow: 0 1px 0 rgba(0,0,0,.04), 0 6px 24px -12px rgba(0,0,0,.18);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* content-specific — preserved */
+  --comp: #1C5FB0; --comp-bg: #DAE6F6;
+  --comm: #A85F00; --comm-bg: #F6E4C6;
   --sig: #BD2766;
-  --code-bg: #E7EBEF;
-  --display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
-  --body: "Source Serif 4", Georgia, "Times New Roman", serif;
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* compat aliases */
+  --surface: var(--paper); --fg: var(--ink); --muted: var(--mute);
+  --rule: var(--line2); --body: var(--sans); --display: var(--sans);
+}
+[data-theme="dark"] {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --comp: #6FAAF0; --comp-bg: #15304F; --comm: #EAAA4E; --comm-bg: #41300F; --sig: #F2709F;
+  color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0D1115; --surface: #151B22; --fg: #E2E7EC; --muted: #98A4B0; --line: #3A4550; --rule: #252E37;
-    --comp: #6FAAF0; --comp-bg: #15304F; --comm: #EAAA4E; --comm-bg: #41300F; --sig: #F2709F; --code-bg: #1C242C;
-    color-scheme: dark;
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --comp: #6FAAF0; --comp-bg: #15304F; --comm: #EAAA4E; --comm-bg: #41300F; --sig: #F2709F;
+  color-scheme: dark;
   }
 }
-:root[data-theme="dark"] {
-  --bg: #0D1115; --surface: #151B22; --fg: #E2E7EC; --muted: #98A4B0; --line: #3A4550; --rule: #252E37;
-  --comp: #6FAAF0; --comp-bg: #15304F; --comm: #EAAA4E; --comm-bg: #41300F; --sig: #F2709F; --code-bg: #1C242C;
-  color-scheme: dark;
-}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}
+/* ── site nav ──────────────────────────────────────────────────────────── */
+.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line2)}
+.top .in{max-width:1240px;margin:0 auto;padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.875rem;font-family:var(--sans)}
+.top a{text-decoration:none;color:var(--mute);transition:color .15s}
+.top a:hover{color:var(--accent)}
+.top .sp{flex:1}
+.top .page-title{color:var(--ink2)}
+.top .sep-dot{color:var(--line)}
+.top .btn{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:6px;padding:5px 11px;font-size:.84rem;cursor:pointer;font-family:var(--sans)}
+.top .btn:hover{border-color:var(--accent)}
 
+</style></head><body>
+<div class="top"><div class="in">
+  <a href="../">← claude·artifacts</a>
+  <span class="sep-dot">·</span>
+  <span class="page-title">Comm–Compute Fusion Patterns</span>
+  <span class="sp"></span>
+  <button class="btn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+</div></div>
+<script>(function(){
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  var root=document.documentElement,saved=store('osf:theme');
+  if(saved)root.setAttribute('data-theme',saved);
+  document.addEventListener('DOMContentLoaded',function(){
+    var btn=document.getElementById('themeBtn');
+    if(!btn)return;
+    btn.onclick=function(){
+      var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme:dark)').matches);
+      var t=dark?'light':'dark';root.setAttribute('data-theme',t);store('osf:theme',t);
+    };
+  });
+})();</script>
+
+<title>Comm–Compute Fusion Patterns</title>
+<style>
 * { box-sizing: border-box; }
 body {
   background: var(--bg); color: var(--fg);
