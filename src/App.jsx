@@ -24,6 +24,13 @@ const ARTIFACTS = [
     description: 'Seven patterns for fusing GPU-to-GPU communication with computation: ring-allreduce bucketing, pipeline bubble reduction, tensor-parallel overlap, and the scheduling constraints that determine whether fusion actually helps.',
     tags: ['Distributed Training', 'NCCL', 'Overlap', 'PyTorch'],
   },
+  {
+    slug: 'cuda-graphs',
+    title: 'PyTorch CUDA Graphs',
+    kind: 'Reference · PyTorch',
+    description: 'How PyTorch captures and replays CUDA graphs: the capture lifecycle, private memory pools, graph-safe RNG, make_graphed_callables, conditional nodes, and Inductor CUDA graph trees. Written from source in Simplified Technical English.',
+    tags: ['PyTorch', 'CUDA', 'CUDA Graphs', 'Inductor'],
+  },
 ]
 
 function store(k, v) {

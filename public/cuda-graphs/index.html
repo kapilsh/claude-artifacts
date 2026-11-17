@@ -1,0 +1,953 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PyTorch CUDA Graphs</title>
+<meta name="description" content="How PyTorch captures, stores, and replays CUDA graphs: capture lifecycle, private memory pools, graph-safe RNG, make_graphed_callables, conditional nodes, and Inductor CUDA graph trees.">
+<style>:root {
+  /* ai-systems-notes design system */
+  --bg: #f6f4ee; --paper: #fffdf8; --ink: #1d1f23; --ink2: #4a4e57; --mute: #7b808a;
+  --line: #d9d4c7; --line2: #e9e5da; --accent: #c2410c; --accent-soft: #fbe6da;
+  --cool: #0e7490; --cool-soft: #d8eef2; --ok: #3f7d20; --ok-soft: #e3f0d8;
+  --code-bg: #f0ece2; --shadow: 0 1px 0 rgba(0,0,0,.04), 0 6px 24px -12px rgba(0,0,0,.18);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --host: #9A5A06; --host-soft: #FAEEDB;
+  --dist: #0D7066; --dist-soft: #DCF0EC;
+  --warn: #A23B1A;
+  --surface: var(--paper); --sunk: var(--bg); --muted: var(--mute);
+  --line-strong: var(--line); --body: var(--sans); --display: var(--sans);
+}
+[data-theme="dark"] {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --cool-soft: #14323a; --ok: #8fcf6a; --ok-soft: #1c2a14; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --cool-soft: #14323a; --ok: #8fcf6a; --ok-soft: #1c2a14; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+  color-scheme: dark;
+  }
+}
+html{scroll-padding-top:56px}
+/* ── site nav ──────────────────────────────────────────────────────────── */
+.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line2);margin:0 calc(-1 * max(16px, env(safe-area-inset-left, 0px)))}
+.top .in{max-width:1240px;margin:0 auto;padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.875rem;font-family:var(--sans)}
+.top a{text-decoration:none;color:var(--mute);transition:color .15s}
+.top a:hover{color:var(--accent)}
+.top .sp{flex:1}
+.top .page-title{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top .sep-dot{color:var(--line)}
+.top .btn{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:6px;padding:5px 11px;font-size:.84rem;cursor:pointer;font-family:var(--sans);white-space:nowrap}
+.top .btn:hover{border-color:var(--accent)}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.shell { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 48px; padding-block: 40px 96px; }
+@media (min-width: 1100px) { .shell { grid-template-columns: 210px minmax(0, 1fr); } }
+
+nav.index { display: none; }
+@media (min-width: 1100px) {
+  nav.index { display: block; position: sticky; top: 72px; align-self: start; font-size: 13.5px; }
+  nav.index ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+  nav.index li { counter-increment: s; }
+  nav.index a { display: grid; grid-template-columns: 26px 1fr; padding: 5px 8px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+  nav.index a::before { content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 11.5px; padding-top: 1px; }
+  nav.index a:hover, nav.index a:focus-visible { color: var(--ink); background: var(--paper); }
+  nav.index .nav-head { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 8px; }
+}
+
+main { min-width: 0; }
+.prose { max-width: 70ch; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2.2rem, 5vw, 3.4rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.75rem; font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; margin-top: 10px; }
+p { margin: 0; }
+section { display: grid; gap: 18px; padding-top: 64px; scroll-margin-top: 56px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+.eyebrow b { color: var(--accent); font-weight: 600; }
+.lede { font-size: 1.12rem; color: var(--ink); max-width: 66ch; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+:not(pre) > code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+ul.plain, ol.plain { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; max-width: 70ch; }
+
+header.hero { display: grid; gap: 16px; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13.5px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.dev { background: var(--accent-soft); border-color: var(--accent); }
+.sw.host { background: var(--host-soft); border-color: var(--host); }
+.sw.dist { background: var(--dist-soft); border-color: var(--dist); }
+.sw.cpu { background: var(--surface); border-color: var(--line-strong); }
+
+/* figures */
+figure.fig { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 18px 14px; display: grid; gap: 12px; color: var(--ink); }
+.fig .scroll { overflow-x: auto; }
+.fig svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.fig figcaption { font-size: 13.5px; color: var(--muted); max-width: 84ch; }
+.fig figcaption b { color: var(--ink); font-weight: 600; }
+svg text { font-family: var(--mono); fill: var(--ink); font-size: 12px; white-space: pre; }
+svg .ts { font-size: 10.5px; fill: var(--muted); }
+svg .tb { font-weight: 600; font-size: 12.5px; }
+svg .ti { font-size: 11px; }
+svg .lane { font-size: 10.5px; letter-spacing: .08em; fill: var(--muted); }
+.bx { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+.bx2 { fill: var(--sunk); stroke: var(--line-strong); stroke-width: 1.2; }
+.acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.hst { fill: var(--host-soft); stroke: var(--host); stroke-width: 1.5; }
+.dst { fill: var(--dist-soft); stroke: var(--dist); stroke-width: 1.5; }
+.cl { fill: var(--cool-soft); stroke: var(--cool); stroke-width: 1.5; }
+.e { stroke: var(--ink); stroke-width: 1.3; fill: none; }
+.e.a { stroke: var(--accent); stroke-width: 1.8; }
+.e.h { stroke: var(--host); stroke-width: 1.6; }
+.e.d { stroke: var(--dist); stroke-width: 1.6; }
+.e.c { stroke: var(--cool); stroke-width: 1.6; }
+.e.dash { stroke-dasharray: 4 4; stroke: var(--mute); }
+.e.w { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 3 4; }
+.rule { stroke: var(--line); stroke-width: 1; }
+.mk { fill: var(--ink); } .mk-a { fill: var(--accent); } .mk-h { fill: var(--host); } .mk-d { fill: var(--dist); } .mk-c { fill: var(--cool); } .mk-m { fill: var(--mute); }
+.ta { fill: var(--accent) !important; } .th { fill: var(--host) !important; } .td { fill: var(--dist) !important; } .tw { fill: var(--warn) !important; } .tc { fill: var(--cool) !important; }
+
+/* tables */
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--sunk); white-space: nowrap; }
+td code { white-space: nowrap; }
+td.wrap code { white-space: normal; }
+
+/* notes */
+.notes { display: grid; gap: 10px; }
+.note { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 14.5px; max-width: 86ch; }
+.note .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding-top: 3px; color: var(--muted); }
+.note.caution { border-left: 3px solid var(--warn); }
+.note.caution .tag { color: var(--warn); }
+.note.info { border-left: 3px solid var(--accent); }
+.note.info .tag { color: var(--accent); }
+@media (max-width: 520px) { .note { grid-template-columns: 1fr; gap: 4px; } }
+
+/* code */
+.code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.code .bar { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.code pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; color: var(--ink); }
+.code .c { color: var(--muted); }
+.code .k { color: var(--accent); }
+
+/* procedure steps */
+.steps { counter-reset: st; list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; max-width: 86ch; }
+.steps li { counter-increment: st; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 15px; }
+.steps li::before { content: counter(st); font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; text-align: right; }
+.steps li .src { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-left: 6px; }
+
+/* lifecycle stepper */
+.stepper { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; display: grid; gap: 14px; }
+.stepper .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip { font: 500 13px var(--mono); padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+.chip:hover { border-color: var(--ink2); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stepper .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.flags { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.flag { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; display: grid; gap: 2px; transition: background .15s, border-color .15s; }
+.flag .v { font-size: 13.5px; font-weight: 600; color: var(--mute); }
+.flag.on { background: var(--accent-soft); border-color: var(--accent); }
+.flag.on .v { color: var(--accent); }
+.flag.chg { box-shadow: 0 0 0 2px var(--accent); }
+.stepper .desc { font-size: 14.5px; max-width: 86ch; display: grid; gap: 6px; }
+.stepper .desc .api { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.stepper .ctl { display: flex; gap: 8px; }
+.stepper .ctl button { font: 500 13px var(--sans); padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+.stepper .ctl button:disabled { opacity: .45; cursor: default; }
+
+footer.foot { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px 18px; }
+</style></head><body>
+<div class="top"><div class="in">
+  <a href="../">← claude·artifacts</a>
+  <span class="sep-dot">·</span>
+  <span class="page-title">PyTorch CUDA Graphs</span>
+  <span class="sp"></span>
+  <button class="btn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+</div></div>
+<script>(function(){
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  var root=document.documentElement,saved=store('osf:theme');
+  if(saved)root.setAttribute('data-theme',saved);
+  document.addEventListener('DOMContentLoaded',function(){
+    var btn=document.getElementById('themeBtn');
+    if(!btn)return;
+    btn.onclick=function(){
+      var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme:dark)').matches);
+      var t=dark?'light':'dark';root.setAttribute('data-theme',t);store('osf:theme',t);
+    };
+  });
+})();</script>
+
+<div class="shell">
+<nav class="index" aria-label="Sections">
+  <div class="nav-head">Contents</div>
+  <ol>
+    <li><a href="#layers">Layers</a></li>
+    <li><a href="#lifecycle">Lifecycle</a></li>
+    <li><a href="#capture">Capture begin</a></li>
+    <li><a href="#registry">Capture registry</a></li>
+    <li><a href="#memory">Private pools</a></li>
+    <li><a href="#frees">Frees in capture</a></li>
+    <li><a href="#rng">Graph-safe RNG</a></li>
+    <li><a href="#replay">Instantiate, replay</a></li>
+    <li><a href="#reset">Reset, teardown</a></li>
+    <li><a href="#graphed">make_graphed_callables</a></li>
+    <li><a href="#cond">Conditional nodes</a></li>
+    <li><a href="#trees">CUDA graph trees</a></li>
+    <li><a href="#nccl">NCCL in capture</a></li>
+    <li><a href="#faults">Fault isolation</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow"><b>Reference</b> · PyTorch internals · CUDA</div>
+  <h1>PyTorch CUDA Graphs</h1>
+  <p class="lede">This document tells how PyTorch captures CUDA work into a graph and replays it. It covers the C++ core, the allocator, the RNG, the Python APIs, and Inductor CUDA graph trees.</p>
+  <div class="meta-row">
+    <span>Source: <code>pytorch@9c0fed7</code> (2026-10-29)</span>
+    <span>Style: ASD-STE100 (Simplified Technical English)</span>
+  </div>
+  <div class="legend">
+    <span><i class="sw cpu"></i>Python layer</span>
+    <span><i class="sw dev"></i>C++ graph core</span>
+    <span><i class="sw host"></i>Caching allocator</span>
+    <span><i class="sw dist"></i>RNG generator</span>
+  </div>
+</header>
+
+<!-- 01 -->
+<section id="layers">
+  <div class="eyebrow"><b>01</b> · Overview</div>
+  <h2>The layers</h2>
+  <div class="prose"><p>A CUDA graph is a record of GPU work. CUDA records the work when a stream is in <em>capture</em> mode. The record keeps kernel arguments, which include device addresses. Replay sends all the recorded work with one CPU call.</p></div>
+  <div class="prose"><p>Raw capture is not sufficient for PyTorch. Two components keep CPU state that capture does not record: the caching allocator and the RNG generator. PyTorch adds a wrapper that makes these two components safe for replay.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 476" role="img" aria-label="Layer stack of the PyTorch CUDA graph machinery">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+      <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-a"/></marker>
+      <marker id="arh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-h"/></marker>
+      <marker id="ard" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-d"/></marker>
+      <marker id="arc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-c"/></marker>
+      <marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-m"/></marker>
+    </defs>
+    <text x="20" y="14" class="lane">COMPILER</text>
+    <rect x="20" y="20" width="920" height="56" rx="6" class="bx2"/>
+    <text x="36" y="43" class="tb">torch/_inductor/cudagraph_trees.py</text>
+    <text x="36" y="63" class="ti">CUDAGraphTreeManager · CUDAGraphNode — tree of recordings, one pool, allocator checkpoint/restore</text>
+
+    <text x="20" y="98" class="lane">USER API</text>
+    <rect x="20" y="104" width="920" height="56" rx="6" class="bx2"/>
+    <text x="36" y="127" class="tb">torch.cuda.graph · torch.cuda.make_graphed_callables</text>
+    <text x="36" y="147" class="ti">sync + empty_cache, side stream · warmup, fwd/bwd capture, autograd.Function wrapper</text>
+
+    <rect x="20" y="172" width="920" height="56" rx="6" class="bx2"/>
+    <text x="36" y="195" class="tb">torch.cuda.CUDAGraph   (torch/cuda/graphs.py)</text>
+    <text x="36" y="215" class="ti">lifecycle hooks · on-demand instantiate (keep_graph) · RNG buffer retention · input liveness check</text>
+
+    <text x="20" y="250" class="lane">C++ CORE</text>
+    <rect x="20" y="256" width="920" height="56" rx="6" class="acc"/>
+    <text x="36" y="279" class="tb">at::cuda::CUDAGraph   (aten/src/ATen/cuda/CUDAGraph.cpp)</text>
+    <text x="36" y="299" class="ti">capture_begin · capture_end_pre/post · instantiate · replay · reset · conditional nodes</text>
+
+    <line x1="480" y1="76" x2="480" y2="102" class="e" marker-end="url(#ar)"/>
+    <line x1="480" y1="160" x2="480" y2="170" class="e" marker-end="url(#ar)"/>
+    <line x1="480" y1="228" x2="480" y2="254" class="e" marker-end="url(#ar)"/>
+
+    <text x="20" y="342" class="lane">STATEFUL COMPONENTS</text>
+    <rect x="20" y="348" width="294" height="64" rx="6" class="hst"/>
+    <text x="34" y="370" class="tb">CUDACachingAllocator</text>
+    <text x="34" y="387" class="ti">private pools · allocation_scopes_</text>
+    <text x="34" y="403" class="ti">deferred cross-stream frees</text>
+    <rect x="333" y="348" width="294" height="64" rx="6" class="dst"/>
+    <text x="347" y="370" class="tb">CUDAGeneratorImpl</text>
+    <text x="347" y="387" class="ti">graph-safe Philox state</text>
+    <text x="347" y="403" class="ti">seed / offset device tensors</text>
+    <rect x="646" y="348" width="294" height="64" rx="6" class="bx"/>
+    <text x="660" y="370" class="tb">CachingHostAllocator</text>
+    <text x="660" y="387" class="ti">pinned-memory pool per graph</text>
+    <text x="660" y="403" class="ti">same stream filter as device pool</text>
+    <line x1="167" y1="312" x2="167" y2="346" class="e h" marker-end="url(#arh)"/>
+    <line x1="480" y1="312" x2="480" y2="346" class="e d" marker-end="url(#ard)"/>
+    <line x1="793" y1="312" x2="793" y2="346" class="e" marker-end="url(#ar)"/>
+
+    <rect x="20" y="424" width="920" height="44" rx="6" class="cl"/>
+    <text x="36" y="443" class="tb tc">CUDA runtime</text>
+    <text x="36" y="459" class="ti">cudaStreamBeginCapture · cudaStreamEndCapture · cudaGraphInstantiateWithFlags · cudaGraphLaunch · cudaGraphAddNode</text>
+  </svg></div>
+  <figcaption><b>Figure 1.</b> Each layer calls the layer below it. The C++ core calls the CUDA runtime. It also tells the allocator and the generator when a capture starts and stops.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Problem in raw capture</th><th>PyTorch solution</th><th>Section</th></tr></thead>
+    <tbody>
+      <tr><td>Captured kernels keep device addresses. The allocator can give those addresses to other tensors after capture.</td><td>Route capture allocations to a private pool. Keep the pool until no graph uses it.</td><td><a href="#memory">05</a></td></tr>
+      <tr><td>The allocator queries CUDA events to recycle cross-stream blocks. Event queries are illegal during capture.</td><td>Defer those frees until capture ends.</td><td><a href="#frees">06</a></td></tr>
+      <tr><td>RNG kernels receive seed and offset as values. Replay would repeat the same random numbers.</td><td>Give kernels pointers to device tensors. Refill the tensors before each replay.</td><td><a href="#rng">07</a></td></tr>
+      <tr><td>The graph has fixed input and output addresses.</td><td>Copy new inputs into static tensors. Return static outputs.</td><td><a href="#graphed">10</a>, <a href="#trees">12</a></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 02 -->
+<section id="lifecycle">
+  <div class="eyebrow"><b>02</b> · State</div>
+  <h2>Lifecycle and state flags</h2>
+  <div class="prose"><p><code>at::cuda::CUDAGraph</code> uses five flags to record its state. <code>reset()</code> reads these flags to find the resources that it must release. A failed capture can leave any combination of flags set.</p></div>
+  <div class="stepper" id="lc">
+    <div class="row"><span class="lbl">Mode</span>
+      <button class="chip" data-mode="0" aria-pressed="true">keep_graph=False</button>
+      <button class="chip" data-mode="1" aria-pressed="false">keep_graph=True</button>
+    </div>
+    <div class="row" id="lcSteps"><span class="lbl">Step</span></div>
+    <div class="flags" id="lcFlags"></div>
+    <div class="desc" id="lcDesc"></div>
+    <div class="ctl"><button id="lcPrev">← Previous</button><button id="lcNext">Next →</button></div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Flag</th><th>Set by</th><th>Cleared by</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>allocated_pool_</code></td><td><code>capture_begin</code></td><td><code>reset</code></td><td>The graph holds a reference to its private pool. <code>reset</code> must call <code>releasePool</code>.</td></tr>
+      <tr><td><code>capturing_to_pool_</code></td><td><code>capture_begin</code></td><td><code>capture_end_pre</code>, <code>reset</code></td><td>The allocator still routes allocations to the pool. If capture fails, <code>reset</code> calls <code>endAllocateToPool</code> first.</td></tr>
+      <tr><td><code>capture_ended_</code></td><td><code>capture_end_pre</code></td><td><code>reset</code></td><td><code>cudaStreamEndCapture</code> succeeded. <code>replay</code> and <code>pool</code> require it.</td></tr>
+      <tr><td><code>has_graph_</code></td><td><code>capture_end_pre</code></td><td><code>capture_end_post</code> (keep_graph=False), <code>reset</code></td><td>The template <code>cudaGraph_t</code> exists. <code>raw_cuda_graph()</code> requires it.</td></tr>
+      <tr><td><code>has_graph_exec_</code></td><td><code>instantiate</code></td><td><code>reset</code></td><td>The executable <code>cudaGraphExec_t</code> exists. C++ <code>replay</code> requires it.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="notes">
+    <div class="note info"><span class="tag">Note</span><div><code>capture_end()</code> is <code>capture_end_pre()</code> + <code>instantiate()</code> + <code>capture_end_post()</code>. The split gives a window in which the template is live in both modes. Capture-end hooks run in this window.</div></div>
+    <div class="note info"><span class="tag">Note</span><div><code>enable_debug_mode()</code> sets <code>keep_graph_ = true</code>. No other debug flag exists. <code>debug_dump()</code> is in Python and uses <code>cuda.bindings</code>.</div></div>
+  </div>
+</section>
+
+<!-- 03 -->
+<section id="capture">
+  <div class="eyebrow"><b>03</b> · Procedure</div>
+  <h2>Capture begin: the sequence</h2>
+  <div class="prose"><p><code>with torch.cuda.graph(g):</code> starts this sequence. The order of steps 8 and 9 is important.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 560" role="img" aria-label="Sequence diagram of capture_begin">
+    <rect x="20" y="14" width="190" height="34" rx="5" class="bx2"/><text x="115" y="36" text-anchor="middle" class="tb">graph.__enter__</text>
+    <rect x="265" y="14" width="190" height="34" rx="5" class="acc"/><text x="360" y="36" text-anchor="middle" class="tb">at::cuda::CUDAGraph</text>
+    <rect x="515" y="14" width="190" height="34" rx="5" class="hst"/><text x="610" y="36" text-anchor="middle" class="tb">CachingAllocator</text>
+    <rect x="745" y="14" width="190" height="34" rx="5" class="cl"/><text x="840" y="36" text-anchor="middle" class="tb">CUDA runtime</text>
+    <line x1="115" y1="48" x2="115" y2="548" class="life"/>
+    <line x1="360" y1="48" x2="360" y2="548" class="life"/>
+    <line x1="610" y1="48" x2="610" y2="548" class="life"/>
+    <line x1="840" y1="48" x2="840" y2="548" class="life"/>
+
+    <!-- 1 -->
+    <text x="24" y="78" class="ts">1</text>
+    <text x="125" y="78" class="ti">torch.cuda.synchronize()</text>
+    <!-- 2 -->
+    <text x="24" y="112" class="ts">2</text>
+    <line x1="115" y1="114" x2="606" y2="114" class="e" marker-end="url(#ar)"/>
+    <text x="362" y="108" text-anchor="middle" class="ti">empty_cache() · _host_emptyCache()</text>
+    <!-- 3 -->
+    <text x="24" y="146" class="ts">3</text>
+    <text x="125" y="146" class="ti">enter torch.cuda.stream(side)</text>
+    <!-- 4 -->
+    <text x="24" y="180" class="ts">4</text>
+    <line x1="115" y1="182" x2="356" y2="182" class="e" marker-end="url(#ar)"/>
+    <text x="237" y="176" text-anchor="middle" class="ti">capture_begin(pool, mode)</text>
+    <!-- 5 -->
+    <text x="24" y="214" class="ts">5</text>
+    <text x="370" y="214" class="ti">check stream ≠ default stream</text>
+    <!-- 6 -->
+    <text x="24" y="246" class="ts">6</text>
+    <text x="370" y="246" class="ti">allocate num_rng_states pairs</text>
+    <!-- 7 -->
+    <text x="24" y="278" class="ts">7</text>
+    <text x="370" y="278" class="ti">mempool_id_ = pool or {uuid,0}</text>
+    <!-- 8 -->
+    <text x="24" y="312" class="ts ta">8</text>
+    <line x1="360" y1="314" x2="606" y2="314" class="e a" marker-end="url(#ara)"/>
+    <text x="483" y="308" text-anchor="middle" class="ti ta">beginAllocateToPool(id, filter)</text>
+    <text x="620" y="318" class="ts">+ host begin_allocate_to_pool</text>
+    <!-- 9 -->
+    <text x="24" y="352" class="ts ta">9</text>
+    <line x1="360" y1="354" x2="836" y2="354" class="e a" marker-end="url(#ara)"/>
+    <text x="598" y="348" text-anchor="middle" class="ti ta">cudaStreamBeginCapture(stream, mode)</text>
+    <!-- 11 -->
+    <text x="24" y="390" class="ts">10</text>
+    <line x1="360" y1="392" x2="606" y2="392" class="e" marker-end="url(#ar)"/>
+    <text x="483" y="386" text-anchor="middle" class="ti">markCaptureBegin()</text>
+    <!-- 12 -->
+    <text x="24" y="428" class="ts">11</text>
+    <line x1="364" y1="430" x2="836" y2="430" class="e dash" marker-start="url(#arm)"/>
+    <text x="598" y="424" text-anchor="middle" class="ti">cudaStreamGetCaptureInfo → capture_id_</text>
+    <!-- 13 -->
+    <text x="24" y="464" class="ts">12</text>
+    <text x="370" y="464" class="ti">registry[capture_id_] = this</text>
+    <!-- 14 -->
+    <text x="24" y="498" class="ts">13</text>
+    <line x1="119" y1="500" x2="360" y2="500" class="e dash" marker-start="url(#arm)"/>
+    <text x="125" y="526" class="ti">run capture-start hooks</text>
+    <text x="125" y="542" class="ts">stream now captures user ops</text>
+  </svg></div>
+  <figcaption><b>Figure 2.</b> Capture begin. Red steps show the required order: pool routing starts <b>before</b> stream capture starts. Step 8 also starts routing in the pinned host allocator.</figcaption>
+  </figure>
+  <ol class="steps">
+    <li><div>Synchronize the device. Release cached blocks. This gives the graph pool the largest possible free memory. <span class="src">graphs.py · graph.__enter__</span></div></li>
+    <li><div>Set a side stream as the current stream. The default stream cannot capture. <span class="src">capture_begin: TORCH_CHECK(stream != default)</span></div></li>
+    <li><div>Allocate <code>num_rng_states</code> (default 8) seed/offset tensor pairs. Do this before pool routing starts, so these tensors come from the global pool. <span class="src">CUDAGeneratorCaptureState::initialize</span></div></li>
+    <li><div>Select the pool ID. A user pool has the form <code>{0, uid}</code>. A graph-created pool has the form <code>{uuid, 0}</code>. <span class="src">MemPool::graph_pool_handle</span></div></li>
+    <li><div>Start pool routing on the device allocator and the host allocator. <span class="src">beginAllocateToPool</span></div></li>
+    <li><div>Start stream capture. Tell the allocator that a real capture is active. <span class="src">cudaStreamBeginCapture · markCaptureBegin</span></div></li>
+    <li><div>Read the capture ID from CUDA. Add the graph to the global registry under that ID. <span class="src">_currently_capturing_graphs</span></div></li>
+  </ol>
+  <div class="notes">
+    <div class="note caution"><span class="tag">Caution</span><div>Pool routing must start before <code>cudaStreamBeginCapture</code>. If the order is reversed, an autograd thread can free a block in the gap. The allocator then records a CUDA event on a capturing stream. That call is illegal and the capture fails.</div></div>
+    <div class="note info"><span class="tag">Note</span><div>With <code>backend:cudaMallocAsync</code>, PyTorch ignores a user pool (<code>{0, uid}</code>). CUDA manages graph memory through the default async pool. Instantiation uses <code>cudaGraphInstantiateFlagAutoFreeOnLaunch</code> for this backend.</div></div>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="registry">
+  <div class="eyebrow"><b>04</b> · Threads</div>
+  <h2>The capture registry and capture modes</h2>
+  <div class="prose"><p>A capture can include work from more than one thread. Autograd runs backward ops on worker threads. A thread-local "current graph" is therefore not correct.</p></div>
+  <div class="prose"><p>PyTorch uses a global map, <code>_currently_capturing_graphs</code>, from CUDA capture ID to <code>CUDAGraph*</code>. A mutex protects it. Any thread can find the active graph: it reads the capture ID of its current stream and looks up the map.</p></div>
+  <div class="code"><div class="bar"><span>CUDAGraph.cpp · lookup paths</span><span>C++</span></div><pre><span class="c">// RNG: which graph owns this capture?</span>
+CUDAGeneratorState::get_capture_state(capture_id)
+  → <span class="k">get_graph_from_capture_id</span>(capture_id)
+  → graph-&gt;get_generator_capture_state(capture_id, *this)
+
+<span class="c">// Python control flow ops: which graph is capturing on this stream?</span>
+CUDAGraph::<span class="k">get_currently_capturing_graph</span>()
+  → currentStreamCaptureIdMayInitCtx() → map.at(id)</pre></div>
+  <div class="tbl"><table>
+    <thead><tr><th>capture_error_mode</th><th>cudaStreamCaptureMode</th><th>Effect on unsafe calls (for example <code>cudaMalloc</code>)</th><th>User</th></tr></thead>
+    <tbody>
+      <tr><td><code>"global"</code></td><td><code>Global</code></td><td>Error if any thread makes the call during any global capture.</td><td>Default</td></tr>
+      <tr><td><code>"thread_local"</code></td><td><code>ThreadLocal</code></td><td>Error only for calls from the capturing thread.</td><td>Inductor graph trees</td></tr>
+      <tr><td><code>"relaxed"</code></td><td><code>Relaxed</code></td><td>No error.</td><td>Special cases only</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><p><code>c10::cuda::CUDAStreamCaptureModeGuard</code> changes the mode for one thread. It calls <code>cudaThreadExchangeStreamCaptureMode</code> in its constructor and destructor. The NCCL watchdog uses this mechanism to query events while another thread captures.</p></div>
+</section>
+
+<!-- 05 -->
+<section id="memory">
+  <div class="eyebrow"><b>05</b> · Memory</div>
+  <h2>Private memory pools</h2>
+  <div class="prose"><p>Captured kernels keep their device addresses. Replay writes to the same addresses. Thus no other tensor can use those addresses while the graph exists. The allocator makes sure of this with a <code>PrivatePool</code> per graph (or per shared pool ID).</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 392" role="img" aria-label="Allocator pool routing and private pool lifecycle">
+    <text x="20" y="16" class="lane">ROUTING — DeviceCachingAllocator::get_pool(size, stream)</text>
+    <rect x="20" y="30" width="190" height="44" rx="6" class="bx"/>
+    <text x="115" y="57" text-anchor="middle" class="tb">malloc(size, stream)</text>
+    <rect x="260" y="30" width="250" height="44" rx="6" class="bx2"/>
+    <text x="385" y="50" text-anchor="middle" class="ti">allocation_scopes_</text>
+    <text x="385" y="65" text-anchor="middle" class="ti">empty?</text>
+    <line x1="210" y1="52" x2="256" y2="52" class="e" marker-end="url(#ar)"/>
+    <rect x="590" y="30" width="350" height="44" rx="6" class="bx"/>
+    <text x="606" y="50" class="tb">global BlockPools</text>
+    <text x="606" y="65" class="ti">small_blocks (≤ 1 MiB) · large_blocks</text>
+    <line x1="510" y1="52" x2="586" y2="52" class="e" marker-end="url(#ar)"/>
+    <text x="548" y="46" text-anchor="middle" class="ts">yes</text>
+
+    <line x1="385" y1="74" x2="385" y2="112" class="e h" marker-end="url(#arh)"/>
+    <text x="393" y="98" class="ts">no</text>
+    <rect x="260" y="116" width="250" height="56" rx="6" class="hst"/>
+    <text x="385" y="138" text-anchor="middle" class="ti">scan scopes in LIFO order</text>
+    <text x="385" y="156" text-anchor="middle" class="ti">filter(stream) true?</text>
+    <path d="M510,132 L560,132 L560,62 L586,62" class="e dash" marker-end="url(#arm)"/>
+    <text x="566" y="104" class="ts">no match</text>
+    <rect x="590" y="116" width="350" height="56" rx="6" class="hst"/>
+    <text x="606" y="138" class="tb th">graph_pools[mempool_id]</text>
+    <text x="606" y="157" class="ti">PrivatePool.small_blocks · .large_blocks</text>
+    <line x1="510" y1="156" x2="586" y2="156" class="e h" marker-end="url(#arh)"/>
+    <text x="548" y="150" text-anchor="middle" class="ts">match</text>
+
+    <rect x="20" y="116" width="200" height="56" rx="6" class="acc"/>
+    <text x="32" y="136" class="ts">filter from CUDAGraph:</text>
+    <text x="32" y="152" class="ti">captureId(stream)</text>
+    <text x="32" y="166" class="ti">  == capture_id_</text>
+    <line x1="220" y1="144" x2="256" y2="144" class="e dash"/>
+
+    <line x1="20" y1="206" x2="940" y2="206" class="rule"/>
+    <text x="20" y="232" class="lane">PRIVATEPOOL LIFECYCLE</text>
+    <rect x="20" y="246" width="172" height="78" rx="6" class="hst"/>
+    <text x="32" y="268" class="tb">createOrIncref</text>
+    <text x="32" y="286" class="ti">use_count += 1</text>
+    <text x="32" y="302" class="ts">capture_begin,</text>
+    <text x="32" y="316" class="ts">retain_pool</text>
+    <rect x="207" y="246" width="172" height="78" rx="6" class="bx"/>
+    <text x="219" y="268" class="tb">graph alive</text>
+    <text x="219" y="286" class="ti">blocks reused only</text>
+    <text x="219" y="302" class="ti">inside this pool</text>
+    <rect x="394" y="246" width="172" height="78" rx="6" class="hst"/>
+    <text x="406" y="268" class="tb">releasePool</text>
+    <text x="406" y="286" class="ti">use_count -= 1</text>
+    <text x="406" y="302" class="ts">CUDAGraph::reset,</text>
+    <text x="406" y="316" class="ts">~MemPool</text>
+    <rect x="581" y="246" width="172" height="78" rx="6" class="bx2"/>
+    <text x="593" y="268" class="tb">use_count == 0</text>
+    <text x="593" y="286" class="ti">insert into</text>
+    <text x="593" y="302" class="ti">graph_pools_freeable</text>
+    <rect x="768" y="246" width="172" height="78" rx="6" class="bx"/>
+    <text x="780" y="268" class="tb">empty_cache()</text>
+    <text x="780" y="286" class="ti">cudaFree free blocks</text>
+    <text x="780" y="302" class="ts">erase pool when</text>
+    <text x="780" y="316" class="ts">cudaMalloc_count == 0</text>
+    <line x1="192" y1="285" x2="205" y2="285" class="e" marker-end="url(#ar)"/>
+    <line x1="379" y1="285" x2="392" y2="285" class="e" marker-end="url(#ar)"/>
+    <line x1="566" y1="285" x2="579" y2="285" class="e" marker-end="url(#ar)"/>
+    <line x1="753" y1="285" x2="766" y2="285" class="e" marker-end="url(#ar)"/>
+    <text x="20" y="356" class="ts">cudaMalloc_count counts segments that this pool still holds. A live output tensor keeps its segment, so the pool stays in graph_pools.</text>
+    <text x="20" y="374" class="ts">A pool with use_count &gt; 0 never returns memory to the global pools. It reserves its high-water mark.</text>
+  </svg></div>
+  <figcaption><b>Figure 3.</b> Top: each allocation checks the routing scopes. The stream filter sends capture-stream allocations to the private pool. Bottom: a private pool releases memory only after all graphs that use it are gone.</figcaption>
+  </figure>
+  <h3>Rules of the private pool</h3>
+  <ul class="plain">
+    <li>During capture, the pool frees and reuses blocks as usual. Replay uses the addresses in the same order, so this reuse is safe.</li>
+    <li>The filter matches the capture ID of the stream. A side stream that joins the capture (through an event wait) has the same capture ID. Its allocations also go to the pool.</li>
+    <li>A stream that does not capture goes to the global pools, also during a capture.</li>
+    <li><code>allocation_scopes_</code> is not a "capture active" signal. <code>torch.cuda.use_mem_pool</code>, NCCL registration, and Inductor warmup also add scopes. The allocator uses a separate <code>capture_tracker_</code> (<code>markCaptureBegin</code>/<code>End</code>) for real captures.</li>
+  </ul>
+  <h3>Pool sharing</h3>
+  <div class="prose"><p>Two or more graphs can share one pool. Pass <code>pool=g1.pool()</code> or <code>pool=torch.cuda.graph_pool_handle()</code> to <code>capture_begin</code>. Memory use goes down. But the graphs must replay in capture order: graph B can use memory that graph A considers free after A ends.</p></div>
+  <div class="note caution"><span class="tag">Caution</span><div>With a shared pool, do not keep an output of graph A and then replay graph B, if B was captured after A's output was free. B can write over the output. CUDA graph trees remove this restriction (<a href="#trees">section 12</a>).</div></div>
+  <div class="prose"><p><code>retain_pool(pool)</code> lets one graph hold a reference to a second pool during capture. <code>reset()</code> releases every pool in <code>retained_mempool_ids_</code>.</p></div>
+</section>
+
+<!-- 06 -->
+<section id="frees">
+  <div class="eyebrow"><b>06</b> · Memory</div>
+  <h2>Frees during capture</h2>
+  <div class="prose"><p>A block that was used on more than one stream (<code>record_stream</code>) has <code>stream_uses</code>. Outside capture, the allocator records one event per stream. <code>process_events()</code> queries the events and frees the block when all events are complete.</p></div>
+  <div class="prose"><p><code>cudaEventQuery</code> is illegal during capture. Thus the allocator changes its behavior when <code>is_capture_context()</code> is true:</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Path</th><th>Outside capture</th><th>During capture</th></tr></thead>
+    <tbody>
+      <tr><td><code>prepare_for_malloc</code></td><td>Calls <code>process_events()</code>.</td><td>Does not call it. With <code>graph_capture_record_stream_reuse</code>, calls <code>free_safe_blocks_in_capture()</code>.</td></tr>
+      <tr><td><code>free_locked</code>, block with <code>stream_uses</code></td><td><code>insert_events(block)</code>.</td><td>Adds the block to <code>deferred_blocks</code>. The block is not free until capture ends.</td></tr>
+      <tr><td><code>free_locked</code>, single-stream block</td><td><code>free_block</code>.</td><td><code>free_block</code> (same).</td></tr>
+      <tr><td>After capture</td><td>—</td><td>The next <code>process_events()</code> (first malloc outside capture) calls <code>insert_events_deferred_until_no_capture</code>: remove stream uses made during capture, record events for older uses. With <code>graph_capture_record_stream_reuse</code>, <code>endAllocateToPool</code> does this at capture end.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><p>Stream uses made during capture are complete at capture end. <code>cudaStreamEndCapture</code> fails if a side stream does not join back. Thus the allocator removes those uses without events.</p></div>
+  <div class="note info"><span class="tag">Note</span><div>The option <code>graph_capture_record_stream_reuse:True</code> inserts empty "free marker" nodes into the graph. The allocator walks the graph backward from the current stream to find blocks that are safe to reuse during capture. This option does not work with conditional nodes (issue #175001).</div></div>
+</section>
+
+<!-- 07 -->
+<section id="rng">
+  <div class="eyebrow"><b>07</b> · RNG</div>
+  <h2>Graph-safe RNG</h2>
+  <div class="prose"><p>PyTorch CUDA RNG uses Philox. A kernel needs a <code>seed</code> and an <code>offset</code>. In eager mode, the host passes both as values. Then it increments the offset. If capture recorded the values, each replay would make the same numbers.</p></div>
+  <div class="prose"><p>During capture, <code>philox_cuda_state()</code> gives the kernel two <em>pointers</em> to device tensors and one intra-graph offset value. Before each replay, PyTorch writes the current seed and offset into those tensors.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 384" role="img" aria-label="Graph-safe RNG at capture time and replay time">
+    <text x="20" y="16" class="lane">CAPTURE TIME</text>
+    <text x="500" y="16" class="lane">REPLAY TIME — CUDAGraph::replay()</text>
+    <line x1="480" y1="8" x2="480" y2="318" class="rule"/>
+
+    <rect x="20" y="28" width="440" height="80" rx="6" class="dst"/>
+    <text x="34" y="48" class="tb td">CUDAGeneratorCaptureState</text>
+    <text x="34" y="66" class="ti">seed_extragraph_    int64[1]  device, fixed address</text>
+    <text x="34" y="82" class="ti">offset_extragraph_  int64[1]  device, fixed address</text>
+    <text x="34" y="98" class="ti">offset_intragraph_  uint64    host, starts at 0</text>
+
+    <rect x="20" y="124" width="440" height="58" rx="6" class="bx"/>
+    <text x="34" y="144" class="tb">op 1: philox_cuda_state(n1)</text>
+    <text x="34" y="162" class="ti">kernel gets {&amp;seed, &amp;offset, intragraph = 0}</text>
+    <text x="34" y="176" class="ts">intragraph += round_up(n1, 4)</text>
+    <rect x="20" y="194" width="440" height="58" rx="6" class="bx"/>
+    <text x="34" y="214" class="tb">op 2: philox_cuda_state(n2)</text>
+    <text x="34" y="232" class="ti">kernel gets {&amp;seed, &amp;offset, intragraph = n1'}</text>
+    <text x="34" y="246" class="ts">intragraph += round_up(n2, 4)</text>
+    <rect x="20" y="264" width="440" height="50" rx="6" class="acc"/>
+    <text x="34" y="284" class="tb">capture_end_pre: finalize()</text>
+    <text x="34" y="302" class="ti">wholegraph_increment = n1' + n2'</text>
+    <line x1="240" y1="108" x2="240" y2="122" class="e d" marker-end="url(#ard)"/>
+    <line x1="240" y1="182" x2="240" y2="192" class="e" marker-end="url(#ar)"/>
+    <line x1="240" y1="252" x2="240" y2="262" class="e" marker-end="url(#ar)"/>
+
+    <rect x="500" y="28" width="440" height="66" rx="6" class="dst"/>
+    <text x="514" y="48" class="tb td">1 · replay_prologue</text>
+    <text x="514" y="66" class="ti">seed_extragraph_.fill_(seed_)</text>
+    <text x="514" y="82" class="ti">offset_extragraph_.fill_(philox_offset_)</text>
+    <rect x="500" y="106" width="440" height="44" rx="6" class="dst"/>
+    <text x="514" y="126" class="tb td">2 · advance host offset</text>
+    <text x="514" y="142" class="ti">philox_offset_ += wholegraph_increment</text>
+    <rect x="500" y="162" width="440" height="44" rx="6" class="cl"/>
+    <text x="514" y="182" class="tb tc">3 · cudaGraphLaunch(exec, stream)</text>
+    <text x="514" y="198" class="ts">fill_ kernels run first on the same stream</text>
+    <rect x="500" y="218" width="440" height="66" rx="6" class="acc"/>
+    <text x="514" y="238" class="tb">4 · in kernel: philox::unpack(arg)</text>
+    <text x="514" y="256" class="ti">seed   = *arg.seed_.ptr</text>
+    <text x="514" y="272" class="ti">offset = *arg.offset_.ptr + arg.offset_intragraph_</text>
+    <line x1="720" y1="94" x2="720" y2="104" class="e" marker-end="url(#ar)"/>
+    <line x1="720" y1="150" x2="720" y2="160" class="e" marker-end="url(#ar)"/>
+    <line x1="720" y1="206" x2="720" y2="216" class="e" marker-end="url(#ar)"/>
+
+    <text x="20" y="342" class="ts">The graph acts as one large RNG op. Eager ops after the replay see the offset advanced by the full graph increment.</text>
+    <text x="20" y="360" class="ts">Result: replay output is bitwise equal to eager output, if RNG ops are enqueued from one thread.</text>
+  </svg></div>
+  <figcaption><b>Figure 4.</b> Left: capture stores pointers and an intra-graph offset in each kernel's arguments. Right: replay refills the device tensors, then advances the host offset by the total.</figcaption>
+  </figure>
+  <h3>Data structures</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Type</th><th>Owner</th><th>Content</th></tr></thead>
+    <tbody>
+      <tr><td><code>CUDAGeneratorState</code></td><td>Generator (shared by graph-safe aliases)</td><td><code>seed_</code>, <code>philox_offset_per_thread_</code>. Eager state.</td></tr>
+      <tr><td><code>CUDAGeneratorCaptureState</code></td><td><code>CUDAGraph</code></td><td>Device seed/offset tensors, host intra-graph offset. One per (capture, generator state).</td></tr>
+      <tr><td><code>CapturedGeneratorState</code></td><td><code>CUDAGraph::captured_generator_states_</code></td><td>Capture state + generator state + capture ID + <code>wholegraph_increment</code>.</td></tr>
+      <tr><td><code>PhiloxCudaState</code></td><td>Kernel argument</td><td><code>captured_</code> flag. Values (eager) or pointers + intra-graph offset (captured).</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Limits</h3>
+  <ul class="plain">
+    <li>The graph allocates <code>num_rng_states</code> slots before capture (default 8). Each distinct generator state takes one slot. If the capture uses more, PyTorch raises "CUDA graph RNG state limit exceeded". <code>capture_end_pre</code> removes unused slots.</li>
+    <li>Each increment is rounded up to a multiple of 4. Philox makes 4 values per call.</li>
+    <li><code>set_current_seed</code> during capture is allowed only with the same seed.</li>
+    <li>RNG inside a conditional node body is not supported. <code>end_capture_to_conditional_node</code> raises an error.</li>
+    <li>Python keeps the RNG buffers alive with <code>retain_object(..., synchronize_before_release=True)</code>. A replay that is still running can thus read them safely.</li>
+  </ul>
+</section>
+
+<!-- 08 -->
+<section id="replay">
+  <div class="eyebrow"><b>08</b> · Execution</div>
+  <h2>Instantiate and replay</h2>
+  <div class="code"><div class="bar"><span>CUDAGraph::instantiate</span><span>C++</span></div><pre>cudaGraphInstantiateWithFlags(&amp;graph_exec_, graph_,
+    cudaGraphInstantiateFlagAutoFreeOnLaunch     <span class="c">// cudaMallocAsync: free unfreed graph allocs on relaunch</span>
+  | cudaGraphInstantiateFlagUseNodePriority);    <span class="c">// keep per-kernel stream priority (not on ROCm)</span></pre></div>
+  <div class="prose"><p>With <code>keep_graph=True</code>, a second <code>instantiate()</code> destroys the old exec and makes a new one. Use this after you edit the raw <code>cudaGraph_t</code>. PyTorch does not track such edits.</p></div>
+  <h3>Replay procedure</h3>
+  <ol class="steps">
+    <li><div>Python: if <code>check_input_liveness</code> is on, make sure no captured input tensor is freed. <span class="src">_tracker.check_alive</span></div></li>
+    <li><div>Python: if no exec exists (<code>keep_graph=True</code>), instantiate now. This adds latency to the first replay. <span class="src">CUDAGraph.replay</span></div></li>
+    <li><div>Python: run replay-start hooks. Record the current stream if retained objects need a sync before release.</div></li>
+    <li><div>C++: set the device to the capture device. <span class="src">OptionalDeviceGuard</span></div></li>
+    <li><div>C++: run <code>replay_prologue</code> for each captured generator state. <span class="src">section 07</span></div></li>
+    <li><div>C++: launch the exec on the <em>current</em> stream. This stream can be different from the capture stream. <span class="src">cudaGraphLaunch</span></div></li>
+    <li><div>Python: run replay-end hooks (also on error).</div></li>
+  </ol>
+  <div class="note caution"><span class="tag">Caution</span><div>If you replay on a stream that is not the capture stream, first make that stream wait for the capture stream. Work queued before capture can still use memory that the graph uses.</div></div>
+  <div class="note info"><span class="tag">Note</span><div>Replay does not run CPU code. The allocator, autograd, and Python see no change. Output tensors keep the same storage. Each replay writes over the previous output.</div></div>
+</section>
+
+<!-- 09 -->
+<section id="reset">
+  <div class="eyebrow"><b>09</b> · Teardown</div>
+  <h2>Reset and teardown</h2>
+  <div class="prose"><p><code>~CUDAGraph()</code> calls <code>reset()</code>. <code>reset()</code> warns on error and does not throw, because it runs in a destructor. It does these steps in this order:</p></div>
+  <ol class="steps">
+    <li><div>Clear <code>captured_generator_states_</code>.</div></li>
+    <li><div>If <code>capture_id_ != 0</code>, remove the graph from the capture registry.</div></li>
+    <li><div>If <code>capturing_to_pool_</code>, call <code>endAllocateToPool</code> (device and host). This applies to an abandoned capture.</div></li>
+    <li><div>Clear cuBLAS workspaces cached for the capture stream. Live workspaces would keep the pool from being freed.</div></li>
+    <li><div>Call <code>releasePool</code> for each retained pool. Release the host pool.</div></li>
+    <li><div>Destroy the template (<code>cudaGraphDestroy</code>) and the exec (<code>cudaGraphExecDestroy</code>) if they exist.</div></li>
+  </ol>
+  <div class="notes">
+    <div class="note caution"><span class="tag">Caution</span><div><code>cudaGraphDestroy</code> and <code>releasePool</code> are illegal while another stream captures in global mode. Python garbage collection can run at any time. <code>make_graphed_callables</code> avoids reference cycles for this reason: refcount frees the graphs at a known point.</div></div>
+    <div class="note caution"><span class="tag">Caution</span><div>Native callers must wait for pending replays before reset or destruction. The C++ class does not synchronize. On ROCm, the destructor calls <code>cudaDeviceSynchronize</code>.</div></div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="graphed">
+  <div class="eyebrow"><b>10</b> · Autograd</div>
+  <h2>make_graphed_callables</h2>
+  <div class="prose"><p>This API captures forward and backward of one or more callables. It returns callables that replay the graphs inside one <code>autograd.Function</code>.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 250" role="img" aria-label="Warmup, capture and replay order in make_graphed_callables">
+    <text x="20" y="16" class="lane">1 · WARMUP — side stream, eager, num_warmup_iters (default 3)</text>
+    <rect x="20" y="26" width="200" height="34" rx="5" class="bx"/><text x="120" y="48" text-anchor="middle" class="ti">f1: fwd + grad × 3</text>
+    <rect x="236" y="26" width="200" height="34" rx="5" class="bx"/><text x="336" y="48" text-anchor="middle" class="ti">f2: fwd + grad × 3</text>
+    <rect x="452" y="26" width="200" height="34" rx="5" class="bx"/><text x="552" y="48" text-anchor="middle" class="ti">f3: fwd + grad × 3</text>
+    <text x="672" y="48" class="ts">cuDNN benchmark, lazy init run here</text>
+
+    <text x="20" y="92" class="lane">2 · CAPTURE — one shared pool (graph_pool_handle)</text>
+    <rect x="20" y="102" width="920" height="54" rx="6" class="hst" opacity=".55"/>
+    <g>
+      <rect x="34" y="112" width="120" height="34" rx="5" class="acc"/><text x="94" y="134" text-anchor="middle" class="tb">F1</text>
+      <rect x="182" y="112" width="120" height="34" rx="5" class="acc"/><text x="242" y="134" text-anchor="middle" class="tb">F2</text>
+      <rect x="330" y="112" width="120" height="34" rx="5" class="acc"/><text x="390" y="134" text-anchor="middle" class="tb">F3</text>
+      <rect x="490" y="112" width="120" height="34" rx="5" class="dst"/><text x="550" y="134" text-anchor="middle" class="tb">B3</text>
+      <rect x="638" y="112" width="120" height="34" rx="5" class="dst"/><text x="698" y="134" text-anchor="middle" class="tb">B2</text>
+      <rect x="786" y="112" width="120" height="34" rx="5" class="dst"/><text x="846" y="134" text-anchor="middle" class="tb">B1</text>
+      <line x1="154" y1="129" x2="180" y2="129" class="e" marker-end="url(#ar)"/>
+      <line x1="302" y1="129" x2="328" y2="129" class="e" marker-end="url(#ar)"/>
+      <line x1="450" y1="129" x2="488" y2="129" class="e" marker-end="url(#ar)"/>
+      <line x1="610" y1="129" x2="636" y2="129" class="e" marker-end="url(#ar)"/>
+      <line x1="758" y1="129" x2="784" y2="129" class="e" marker-end="url(#ar)"/>
+    </g>
+    <text x="20" y="188" class="lane">3 · REPLAY — training loop must use the same order</text>
+    <text x="34" y="214" class="ti">Graphed.forward: copy_ new user args into static inputs → fwd_graph.replay() → return static outputs .detach()</text>
+    <text x="34" y="234" class="ti">Graphed.backward: copy_ grads into static grad outputs → bwd_graph.replay() → return static grad inputs</text>
+  </svg></div>
+  <figcaption><b>Figure 5.</b> Capture order equals run order: forwards 1…N, then backwards N…1. The shared pool is safe only in this order.</figcaption>
+  </figure>
+  <h3>Mechanism</h3>
+  <ul class="plain">
+    <li><b>Static input surface.</b> User args + module parameters. Forward copies a new arg only if its <code>data_ptr</code> differs. Parameters must not move after capture.</li>
+    <li><b>Backward capture.</b> <code>torch.autograd.grad</code> runs inside <code>torch.cuda.graph</code>. Inputs are the static surface entries that need grad. <code>grad_outputs</code> are static <code>empty_like</code> tensors.</li>
+    <li><b>Train/eval switch.</b> For an <code>nn.Module</code>, the new <code>forward</code> replays only if <code>module.training</code> equals the state at capture. Otherwise it runs the original forward.</li>
+    <li><b>No cycles.</b> The graphs are arguments to <code>Graphed.apply</code>, not closure cells. The module is held by <code>weakref</code>. This gives deterministic graph destruction (see section 09).</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Constraint</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>No module hooks at call time.</td><td>Hooks would run during capture only, not on replay.</td></tr>
+      <tr><td>Buffers must have <code>requires_grad=False</code>.</td><td>Only parameters are in the static input surface for grad.</td></tr>
+      <tr><td>Autocast cache must be off.</td><td>Cached casts would be graph-pool tensors with a lifetime that the graph does not control.</td></tr>
+      <tr><td><code>sample_args</code> contain only tensors.</td><td>Non-tensor values are fixed in the graph.</td></tr>
+      <tr><td>No double backward.</td><td><code>backward</code> is <code>once_differentiable</code>.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 11 -->
+<section id="cond">
+  <div class="eyebrow"><b>11</b> · Control flow</div>
+  <h2>Conditional nodes (CUDA ≥ 12.4)</h2>
+  <div class="prose"><p>A normal graph has fixed control flow. CUDA 12.4 adds conditional nodes: IF and WHILE. A device-side value selects the path at replay time. PyTorch uses them for <code>torch.cond</code> and <code>torch.while_loop</code> inside a capture.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 268" role="img" aria-label="Conditional node structure in a captured graph">
+    <text x="20" y="16" class="lane">PARENT GRAPH — capture stream</text>
+    <rect x="20" y="28" width="150" height="44" rx="6" class="bx"/><text x="95" y="55" text-anchor="middle" class="ti">kernels before</text>
+    <rect x="210" y="28" width="230" height="44" rx="6" class="acc"/>
+    <text x="325" y="47" text-anchor="middle" class="ti">set_conditional_handle</text>
+    <text x="325" y="63" text-anchor="middle" class="ts">&lt;&lt;&lt;1,1&gt;&gt;&gt; reads pred (bool)</text>
+    <rect x="480" y="28" width="230" height="44" rx="6" class="cl"/>
+    <text x="595" y="47" text-anchor="middle" class="tb tc">COND node</text>
+    <text x="595" y="63" text-anchor="middle" class="ts">type IF or WHILE, size 1</text>
+    <rect x="750" y="28" width="190" height="44" rx="6" class="bx"/><text x="845" y="55" text-anchor="middle" class="ti">kernels after</text>
+    <line x1="170" y1="50" x2="206" y2="50" class="e" marker-end="url(#ar)"/>
+    <line x1="440" y1="50" x2="476" y2="50" class="e" marker-end="url(#ar)"/>
+    <line x1="710" y1="50" x2="746" y2="50" class="e" marker-end="url(#ar)"/>
+
+    <path d="M560,72 L560,104" class="e c" marker-end="url(#arc)"/>
+    <path d="M630,72 L630,104" class="e dash"/>
+    <rect x="250" y="108" width="690" height="136" rx="8" class="bx2"/>
+    <text x="266" y="130" class="lane">CHILD BODY GRAPH — new non-blocking child stream</text>
+    <text x="266" y="152" class="ti">cudaStreamBeginCaptureToGraph(child, phGraph_out[0], …, capture_mode_)</text>
+    <rect x="266" y="166" width="190" height="40" rx="5" class="bx"/><text x="361" y="191" text-anchor="middle" class="ti">body kernels</text>
+    <rect x="490" y="166" width="230" height="40" rx="5" class="acc"/>
+    <text x="605" y="184" text-anchor="middle" class="ti">set_conditional_handle</text>
+    <text x="605" y="199" text-anchor="middle" class="ts">WHILE only: next pred</text>
+    <line x1="456" y1="186" x2="486" y2="186" class="e" marker-end="url(#ar)"/>
+    <text x="266" y="232" class="ts">Pool filter switches to the child capture ID. Registry maps child ID → same CUDAGraph.</text>
+
+    <text x="20" y="130" class="ts">if/else on CUDA &lt; 12.8:</text>
+    <text x="20" y="148" class="ti">IF(pred)  → true_fn</text>
+    <text x="20" y="166" class="ti">IF(!pred) → false_fn</text>
+    <text x="20" y="184" class="ts">false_fn outputs are copied</text>
+    <text x="20" y="200" class="ts">into true_fn outputs, so the</text>
+    <text x="20" y="216" class="ts">graph after has one address.</text>
+  </svg></div>
+  <figcaption><b>Figure 6.</b> PyTorch adds the COND node to the capturing graph by hand. Then it captures the body on a child stream into the node's body graph.</figcaption>
+  </figure>
+  <ol class="steps">
+    <li><div>Get the capturing <code>cudaGraph_t</code>. Create a conditional handle. <span class="src">cudaGraphConditionalHandleCreate</span></div></li>
+    <li><div>Launch a 1-thread kernel that copies the predicate tensor into the handle. <span class="src">CUDAGraph.cu</span></div></li>
+    <li><div>Get the current capture dependencies. Add a conditional node after them. Make the node the new dependency of the capture stream. <span class="src">cudaGraphAddNode · cudaStreamUpdateCaptureDependencies</span></div></li>
+    <li><div>Create a child stream. Move pool routing to a filter for the child capture ID. Start capture into the body graph.</div></li>
+    <li><div>Run the body. For WHILE, copy outputs into the carried tensors and set the handle again from the new predicate.</div></li>
+    <li><div>End child capture. Pop the stacks. Restore the parent filter. Raise an error if RNG was used in the body.</div></li>
+  </ol>
+  <div class="prose"><p>Stacks (<code>conditional_node_streams_</code>, <code>conditional_graph_capture_ids_</code>, <code>conditional_node_handles_</code>) support nested conditionals. <code>CUDAGraphCaptureControlFlowOpDispatchMode</code> intercepts <code>higher_order.cond</code> and <code>higher_order.while_loop</code> during capture.</p></div>
+</section>
+
+<!-- 12 -->
+<section id="trees">
+  <div class="eyebrow"><b>12</b> · Compiler</div>
+  <h2>CUDA graph trees (Inductor)</h2>
+  <div class="prose"><p><code>torch.compile(mode="reduce-overhead")</code> uses CUDA graph trees. One <code>CUDAGraphTreeManager</code> exists per device. All its graphs share one private pool. The manager removes two restrictions of a shared pool: fixed replay order, and dead intermediate outputs.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 330" role="img" aria-label="CUDA graph tree and execution states">
+    <text x="20" y="16" class="lane">TREE OF RECORDINGS — one pool</text>
+    <circle cx="60" cy="70" r="6" class="mk-m"/>
+    <text x="40" y="52" class="ts">roots</text>
+    <rect x="100" y="50" width="90" height="40" rx="6" class="acc"/><text x="145" y="75" text-anchor="middle" class="tb">A</text>
+    <rect x="240" y="50" width="90" height="40" rx="6" class="acc"/><text x="285" y="75" text-anchor="middle" class="tb">B</text>
+    <rect x="380" y="50" width="90" height="40" rx="6" class="acc"/><text x="425" y="75" text-anchor="middle" class="tb">C</text>
+    <rect x="380" y="130" width="90" height="40" rx="6" class="dst"/><text x="425" y="155" text-anchor="middle" class="tb">D</text>
+    <line x1="66" y1="70" x2="96" y2="70" class="e" marker-end="url(#ar)"/>
+    <line x1="190" y1="70" x2="236" y2="70" class="e" marker-end="url(#ar)"/>
+    <line x1="330" y1="70" x2="376" y2="70" class="e" marker-end="url(#ar)"/>
+    <path d="M330,80 L355,80 L355,150 L376,150" class="e d" marker-end="url(#ard)"/>
+    <text x="20" y="196" class="ti">Replay A, B. Next call is a new function D.</text>
+    <text x="20" y="214" class="ti">The pool's CPU state does not show A/B outputs</text>
+    <text x="20" y="232" class="ti">(replay runs no CPU code). Before D records:</text>
+    <text x="34" y="252" class="ts">1. setCheckpointPoolState(B's checkpoint)</text>
+    <text x="34" y="268" class="ts">2. mark live path outputs as allocated</text>
+    <text x="34" y="284" class="ts">3. free blocks of outputs dead since B</text>
+    <text x="34" y="300" class="ts">4. capture D as a child of B</text>
+
+    <line x1="500" y1="10" x2="500" y2="320" class="rule"/>
+    <text x="520" y="16" class="lane">ExecutionState — per function call</text>
+    <rect x="520" y="34" width="190" height="40" rx="6" class="bx"/><text x="615" y="59" text-anchor="middle" class="tb">NONE</text>
+    <rect x="750" y="34" width="190" height="40" rx="6" class="bx2"/><text x="845" y="59" text-anchor="middle" class="tb">WARMUP</text>
+    <rect x="750" y="130" width="190" height="40" rx="6" class="acc"/><text x="845" y="155" text-anchor="middle" class="tb">RECORDING</text>
+    <rect x="520" y="130" width="190" height="40" rx="6" class="dst"/><text x="615" y="155" text-anchor="middle" class="tb">EXECUTION</text>
+    <line x1="710" y1="54" x2="746" y2="54" class="e" marker-end="url(#ar)"/>
+    <text x="730" y="92" text-anchor="middle" class="ts">1st call</text>
+    <line x1="845" y1="74" x2="845" y2="126" class="e" marker-end="url(#ar)"/>
+    <text x="853" y="104" class="ts">2nd call</text>
+    <line x1="750" y1="150" x2="714" y2="150" class="e" marker-end="url(#ar)"/>
+    <text x="730" y="188" text-anchor="middle" class="ts">3rd+ call</text>
+    <path d="M600,170 C600,200 630,200 630,174" class="e d" marker-end="url(#ard)"/>
+    <text x="520" y="214" class="ts">check_invariants → replay</text>
+    <text x="520" y="244" class="ti">WARMUP: run eager, but allocate in the graph pool.</text>
+    <text x="520" y="262" class="ti">RECORDING: torch.cuda.graph(capture_error_mode=</text>
+    <text x="520" y="278" class="ti">  "thread_local", pool=shared).</text>
+    <text x="520" y="296" class="ti">EXECUTION: copy inputs, replay, rebuild outputs</text>
+    <text x="520" y="312" class="ti">  from saved storage metadata.</text>
+  </svg></div>
+  <figcaption><b>Figure 7.</b> Left: a function has one child node per distinct context. A new branch needs an allocator checkpoint restore. Right: each function moves through warmup, recording, then replay.</figcaption>
+  </figure>
+  <h3>Dispatch procedure — <code>CUDAGraphTreeManager._run</code></h3>
+  <ol class="steps">
+    <li><div>If recording or warmup is in progress, try to end it. End is possible if all outputs of the current node are dead, or a new generation started.</div></li>
+    <li><div>If the function mutates inputs that the tree does not manage, run it eager. If the re-record limit is reached, run it eager.</div></li>
+    <li><div>If the function is not warmed up, run warmup. If the tree is in EXECUTION, restore the allocator checkpoint first.</div></li>
+    <li><div>Look for a child node of the current node for this function. Run <code>check_invariants(new_inputs)</code> on each. On success, replay it.</div></li>
+    <li><div>If no child passes, count a re-record (except <code>StaticInputIdxMismatch</code>). Try to end the current execution. Restore the checkpoint.</div></li>
+    <li><div>Record a new child node under <code>graph_capture_lock</code>.</div></li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th>Invariant check result</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>SUCCESS</code></td><td>Replay is safe.</td></tr>
+      <tr><td><code>CudagraphManagedIdxMismatch</code></td><td>An input that came from a prior graph output has a different address.</td></tr>
+      <tr><td><code>StaticInputIdxMismatch</code></td><td>A parameter or <code>mark_static_address</code> tensor has a different address. Does not count to the limit.</td></tr>
+      <tr><td><code>ExpectedDeadIndicesBeforeGraphMismatch</code></td><td>A tensor that was dead at record time is live now. Replay would write over it.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Generations</h3>
+  <div class="prose"><p>A generation is one invocation of the compiled model. The manager reads <code>GenerationTracker.generation</code> from Dynamo, or the counter from <code>torch.compiler.cudagraph_mark_step_begin()</code>. At a new generation, the manager ends the current path. Outputs of the old path that are still live get a storage access error message:</p></div>
+  <div class="code"><div class="bar"><span>Error text</span><span>RuntimeError</span></div><pre>Error: accessing tensor output of CUDAGraphs that has been overwritten by a subsequent run.</pre></div>
+  <div class="prose"><p>To keep an output past the next run, clone it. A forward with a pending backward does not start a new generation, unless the user calls mark-step.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Config (<code>torch._inductor.config.triton</code>)</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>cudagraph_unexpected_rerecord_limit</code> = 128</td><td>Re-records per (node, function) before PyTorch falls back to eager.</td></tr>
+      <tr><td><code>skip_cudagraph_warmup</code></td><td>Record without a warmup run.</td></tr>
+      <tr><td><code>force_cudagraphs_warmup</code></td><td>Always warm up.</td></tr>
+      <tr><td><code>slow_path_cudagraph_asserts</code></td><td>Compare live pool blocks with expected live storages.</td></tr>
+      <tr><td><code>force_cudagraph_sync</code></td><td>Synchronize after each replay (debug).</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 13 -->
+<section id="nccl">
+  <div class="eyebrow"><b>13</b> · Distributed</div>
+  <h2>NCCL collectives in capture</h2>
+  <ul class="plain">
+    <li>NCCL &gt;= 2.9.6 is necessary. Older versions raise <code>NotImplementedError</code> (<code>errorIfCapturingNonCapturableNCCL</code>).</li>
+    <li>During capture, <code>ProcessGroupNCCL</code> does not enqueue work to the watchdog. The watchdog queries events, and the query is illegal in global capture mode (Note [cuda graph capture and workEnqueue]).</li>
+    <li>Coalesced collectives check capture status. Some host-side bookkeeping runs only when <code>capture_status == None</code>.</li>
+    <li>On ROCm, the watchdog skips <code>hipEventQuery</code> while any capture is active (<code>is_graph_capture_active()</code>). An older HIP runtime can otherwise invalidate the capture.</li>
+  </ul>
+</section>
+
+<!-- 14 -->
+<section id="faults">
+  <div class="eyebrow"><b>14</b> · Troubleshooting</div>
+  <h2>Fault isolation</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Symptom</th><th>Probable cause</th><th>Corrective action</th></tr></thead>
+    <tbody>
+      <tr><td>"CUDA graphs must be captured on a non-default stream"</td><td>Capture began on the legacy default stream.</td><td>Use <code>torch.cuda.graph</code>, or set a side stream.</td></tr>
+      <tr><td>"operation not permitted when stream is capturing"</td><td>A sync, <code>cudaMalloc</code>, or event query ran during capture. Often lazy init or cuDNN benchmark.</td><td>Warm up on a side stream before capture.</td></tr>
+      <tr><td>"The CUDA Graph is empty"</td><td>Work ran on a different stream or device.</td><td>Make side streams wait on the capture stream. Use one device.</td></tr>
+      <tr><td>"CUDA graph RNG state limit exceeded"</td><td>More distinct generator states than <code>num_rng_states</code>.</td><td>Increase <code>num_rng_states</code>.</td></tr>
+      <tr><td>Wrong values after replay, no error</td><td>Input tensor freed or moved after capture. Or shared-pool graphs replayed out of order.</td><td>Use <code>check_input_liveness=True</code>. Replay in capture order.</td></tr>
+      <tr><td>Memory does not go down after <code>del graph</code></td><td>Output tensors are still live. They keep <code>cudaMalloc_count</code> &gt; 0.</td><td>Delete outputs. Call <code>torch.cuda.empty_cache()</code>.</td></tr>
+      <tr><td>Capture fails when an unrelated graph is freed</td><td>GC destroyed a graph during a global capture.</td><td>Delete graphs outside capture regions.</td></tr>
+      <tr><td>"skipping cudagraphs due to …" (compile)</td><td>Input mutation, CPU ops, multiple devices, or the re-record limit.</td><td>Read the logged reason. Use <code>TORCH_LOGS="+cudagraphs"</code>.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <span>Written from source at pytorch@9c0fed7. Behavior can change in later versions.</span>
+</footer>
+</main>
+</div>
+
+<script>
+(function(){
+  var FLAGS=['allocated_pool_','capturing_to_pool_','capture_ended_','has_graph_','has_graph_exec_','capture_id_'];
+  // state = [allocated_pool_, capturing_to_pool_, capture_ended_, has_graph_, has_graph_exec_, capture_id_]
+  var MODES=[
+    [ {n:'new',          s:[0,0,0,0,0,0], api:'CUDAGraph(keep_graph=False)', d:'The object exists. It holds no CUDA resources. capture_stream_ is the current stream.'},
+      {n:'capture_begin',s:[1,1,0,0,0,1], api:'beginAllocateToPool → cudaStreamBeginCapture → registry.emplace', d:'The pool is acquired and routing is on. The stream captures. The registry maps capture_id_ to this graph.'},
+      {n:'capture_end_pre',s:[1,0,1,1,0,1], api:'cudaStreamEndCapture → markCaptureEnd → endAllocateToPool → finalize RNG', d:'Capture is over. graph_ (template) is live. Routing is off, but the pool stays referenced. Capture-end hooks run here.'},
+      {n:'instantiate',  s:[1,0,1,1,1,1], api:'cudaGraphInstantiateWithFlags(AutoFreeOnLaunch | UseNodePriority)', d:'The executable graph exists. Post-instantiate hooks run.'},
+      {n:'capture_end_post',s:[1,0,1,0,1,1], api:'cudaGraphDestroy(graph_)', d:'keep_graph=False: the template is destroyed. raw_cuda_graph() now raises. Only graph_exec_ remains.'},
+      {n:'replay',       s:[1,0,1,0,1,1], api:'replay_prologue → cudaGraphLaunch(exec, current stream)', d:'No flag changes. RNG tensors are refilled. The exec runs on the current stream.'},
+      {n:'reset',        s:[0,0,0,0,0,0], api:'registry.erase → releasePool → cudaGraphExecDestroy', d:'All resources are released. The object can capture again.'} ],
+    [ {n:'new',          s:[0,0,0,0,0,0], api:'CUDAGraph(keep_graph=True)', d:'The object exists. It holds no CUDA resources.'},
+      {n:'capture_begin',s:[1,1,0,0,0,1], api:'beginAllocateToPool → cudaStreamBeginCapture → registry.emplace', d:'The pool is acquired and routing is on. The stream captures.'},
+      {n:'capture_end_pre',s:[1,0,1,1,0,1], api:'cudaStreamEndCapture → endAllocateToPool', d:'Capture is over. graph_ is live.'},
+      {n:'capture_end_post',s:[1,0,1,1,0,1], api:'(no-op for keep_graph=True)', d:'capture_end() does not instantiate in this mode. The template stays. You can read or edit it with raw_cuda_graph().'},
+      {n:'instantiate',  s:[1,0,1,1,1,1], api:'cudaGraphInstantiateWithFlags', d:'Explicit call, or automatic on the first replay(). A second call destroys the old exec and makes a new one.'},
+      {n:'replay',       s:[1,0,1,1,1,1], api:'replay_prologue → cudaGraphLaunch', d:'No flag changes. Template and exec both remain.'},
+      {n:'reset',        s:[0,0,0,0,0,0], api:'releasePool → cudaGraphDestroy → cudaGraphExecDestroy', d:'All resources are released.'} ]
+  ];
+  var mode=0, idx=0;
+  var stepsEl=document.getElementById('lcSteps'), flagsEl=document.getElementById('lcFlags'), descEl=document.getElementById('lcDesc');
+  var prev=document.getElementById('lcPrev'), next=document.getElementById('lcNext');
+  function render(){
+    var seq=MODES[mode], cur=seq[idx], old=idx>0?seq[idx-1].s:null;
+    Array.prototype.forEach.call(stepsEl.querySelectorAll('.chip'),function(b,i){b.setAttribute('aria-pressed',i===idx?'true':'false');});
+    flagsEl.innerHTML='';
+    FLAGS.forEach(function(f,i){
+      var on=!!cur.s[i], d=document.createElement('div');
+      d.className='flag'+(on?' on':'')+(old&&old[i]!==cur.s[i]?' chg':'');
+      var v=f==='capture_id_'?(on?'≠ 0':'0'):(on?'true':'false');
+      d.innerHTML='<span>'+f+'</span><span class="v">'+v+'</span>';
+      flagsEl.appendChild(d);
+    });
+    descEl.innerHTML='<div class="api"></div><div></div>';
+    descEl.children[0].textContent=cur.api; descEl.children[1].textContent=cur.d;
+    prev.disabled=idx===0; next.disabled=idx===seq.length-1;
+  }
+  function build(){
+    Array.prototype.slice.call(stepsEl.querySelectorAll('.chip')).forEach(function(b){b.remove();});
+    MODES[mode].forEach(function(st,i){
+      var b=document.createElement('button'); b.className='chip'; b.textContent=st.n;
+      b.onclick=function(){idx=i;render();}; stepsEl.appendChild(b);
+    });
+    render();
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#lc [data-mode]'),function(b){
+    b.onclick=function(){
+      mode=+b.dataset.mode; idx=Math.min(idx,MODES[mode].length-1);
+      Array.prototype.forEach.call(document.querySelectorAll('#lc [data-mode]'),function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+      build();
+    };
+  });
+  prev.onclick=function(){if(idx>0){idx--;render();}};
+  next.onclick=function(){if(idx<MODES[mode].length-1){idx++;render();}};
+  build();
+})();
+</script>
+</body></html>
