@@ -147,6 +147,16 @@ td.wrap code { white-space: normal; }
 .code pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; color: var(--ink); }
 .code .c { color: var(--muted); }
 .code .k { color: var(--accent); }
+.code .s { color: var(--cool); }
+.code .bar { flex-wrap: wrap; align-items: center; }
+.code .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.code .tab, .code .copy { font: inherit; font-size: 11.5px; line-height: 1.5; background: none; border: 1px solid transparent; border-radius: 5px; padding: 1px 8px; color: var(--muted); cursor: pointer; }
+.code .tab:hover, .code .copy:hover { color: var(--ink); }
+.code .tab[aria-selected="true"] { color: var(--accent); border-color: var(--line); background: var(--surface); }
+.code .copy { border-color: var(--line); margin-left: 6px; }
+.code .lang { padding: 1px 2px; }
+.code pre[hidden] { display: none; }
+.meas td:nth-child(2), .meas td:nth-child(3) { font-family: var(--mono); white-space: nowrap; }
 
 /* procedure steps */
 .steps { counter-reset: st; list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; max-width: 86ch; }
@@ -338,6 +348,67 @@ ul.refs b { font-family: var(--mono); font-size: 12px; color: var(--muted); font
     <div class="note caution"><span class="tag">Caution</span><div>Instantiation costs milliseconds for large graphs. A graph gives a benefit only if you launch it many times. If you instantiate for each iteration, the graph can be slower than streams.</div></div>
     <div class="note caution"><span class="tag">Caution</span><div>Graphs are not always faster. PyGraph (2025) found that 29 of 116 graphs in its PyTorch benchmarks made performance worse, by up to 397%. Measure first. If the GPU is the bottleneck, a graph does not help.</div></div>
   </div>
+  <h3>Measure it from Python</h3>
+  <div class="prose"><p>This step launches 1000 one-block kernels. Run it with a stream, then as a graph. The numbers are from an RTX 4090, driver 595.99, cuda.core 1.2.2, cuda-bindings 13.5.0. The setup is in <a href="#model">02</a>.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Stream launches vs one graph launch</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="py"><span class="k">import</span> time
+
+K = 1000                                         <span class="c"># short kernels in one step</span>
+tiny = LaunchConfig(grid=1, block=32)
+
+<span class="k">def</span> step(st):
+    <span class="k">for</span> _ <span class="k">in</span> range(K):
+        launch(st, tiny, add, x, np.float32(1), np.uint64(32))
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+step(gb)
+gb.end_building()
+graph = gb.complete()
+
+<span class="k">def</span> per_kernel_us(fn, reps=20):
+    fn(); s.sync()                               <span class="c"># warm up</span>
+    t = time.perf_counter()
+    <span class="k">for</span> _ <span class="k">in</span> range(reps):
+        fn()
+    s.sync()
+    <span class="k">return</span> (time.perf_counter() - t) / reps / K * 1e6
+
+print(per_kernel_us(<span class="k">lambda</span>: step(s)))            <span class="c"># stream: ~1.5 µs/kernel</span>
+print(per_kernel_us(<span class="k">lambda</span>: graph.launch(s)))    <span class="c"># graph:  ~0.84 µs/kernel</span>
+
+t = time.perf_counter(); graph.launch(s)         <span class="c"># CPU time to enqueue one step:</span>
+print((time.perf_counter() - t) * 1e6)           <span class="c"># a few µs, not ~1500 µs</span></pre><pre data-p="pyb" hidden><span class="k">import</span> time
+
+K = 1000
+
+<span class="k">def</span> step(stream):
+    <span class="k">for</span> _ <span class="k">in</span> range(K):
+        ck(cu.cuLaunchKernel(add, 1, 1, 1, 32, 1, 1, 0, stream,
+                             ((x, 1.0, 32), PTR_F32_SIZE), 0))
+
+ck(cu.cuStreamBeginCapture(s, GLOBAL))
+step(s)
+graph = ck(cu.cuStreamEndCapture(s))
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+
+<span class="k">def</span> per_kernel_us(fn, reps=20):
+    fn(); ck(cu.cuStreamSynchronize(s))          <span class="c"># warm up</span>
+    t = time.perf_counter()
+    <span class="k">for</span> _ <span class="k">in</span> range(reps):
+        fn()
+    ck(cu.cuStreamSynchronize(s))
+    <span class="k">return</span> (time.perf_counter() - t) / reps / K * 1e6
+
+print(per_kernel_us(<span class="k">lambda</span>: step(s)))
+print(per_kernel_us(<span class="k">lambda</span>: ck(cu.cuGraphLaunch(exe, s))))</pre></div>
+  <div class="tbl"><table class="meas">
+    <thead><tr><th>Measurement (cuda.core)</th><th>Stream</th><th>Graph</th></tr></thead>
+    <tbody>
+      <tr><td>Wall time per kernel, step repeated</td><td>~1.5 µs</td><td>~0.84 µs</td></tr>
+      <tr><td>CPU time to enqueue one step</td><td>~1500 µs</td><td>a few µs</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note info"><span class="tag">Note</span><div>With the stream, the CPU limits the step: each launch costs Python and driver time. With the graph, the CPU is free after a few µs, and the GPU limits the step. The <code>cuda.bindings</code> version measured about the same: ~1.6 µs and ~0.83 µs per kernel. Your numbers will be different. Measure on your system.</div></div>
+
 </section>
 
 <!-- 02 -->
@@ -403,6 +474,122 @@ ul.refs b { font-family: var(--mono); font-size: 12px; color: var(--muted); font
       <tr><td>Updates take effect at the next launch.</td><td>A launch that is running is not affected. You can queue update, launch, update, launch on one stream.</td></tr>
     </tbody>
   </table></div>
+  <h3>Python setup for the snippets</h3>
+  <div class="prose"><p>Each Python snippet has two versions. The <code>cuda.core</code> tab uses the Python object API. The <code>cuda.bindings</code> tab uses only the raw 1:1 bindings: the driver API (<code>cu*</code>), NVRTC, and nvJitLink. Each snippet ran on an RTX 4090 with driver 595.99 (CUDA 13.2), cuda.core 1.2.2, and cuda-bindings 13.5.0. Each C++ snippet compiles with nvcc 13.5. All Python snippets on this page start from this setup. Select a tab once: all code blocks on the page change to that language.</p></div>
+  <div class="code"><div class="bar"><span>Install</span><span class="tabs"><span class="lang">shell</span><button class="copy" type="button">Copy</button></span></div><pre>pip install "cuda-python[all]==13.5.*" "cuda-core[cu13]==1.2.*" \
+            "cuda-toolkit[cudart,crt]==13.5.*" numpy</pre></div>
+  <div class="code" data-tabs><div class="bar"><span>Setup: device, stream, kernels, buffer</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="py"><span class="k">import</span> numpy <span class="k">as</span> np
+<span class="k">from</span> cuda.core <span class="k">import</span> (Device, Program, ProgramOptions, LaunchConfig, launch,
+                       LegacyPinnedMemoryResource)
+<span class="k">from</span> cuda.pathfinder <span class="k">import</span> find_nvidia_header_directory
+
+dev = Device(0)
+dev.set_current()
+s = dev.create_stream()                    <span class="c"># never capture the legacy stream</span>
+
+SRC = <span class="s">r"""
+#include &lt;cuda_device_runtime_api.h&gt;       // cudaGraphSetConditional
+extern "C" __global__ void scale(float* x, float a, size_t n) {
+  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+  if (i &lt; n) x[i] *= a;
+}
+extern "C" __global__ void add(float* x, float b, size_t n) {
+  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+  if (i &lt; n) x[i] += b;
+}
+extern "C" __global__ void set_handle(cudaGraphConditionalHandle h, const int* v) {
+  cudaGraphSetConditional(h, *v);
+}
+extern "C" __global__ void loop_kernel(cudaGraphConditionalHandle h, int* count) {
+  if (--(*count) == 0) cudaGraphSetConditional(h, 0);
+}
+"""</span>
+opts = ProgramOptions(arch=<span class="s">f"sm_{dev.arch}"</span>,
+                      include_path=[find_nvidia_header_directory(<span class="s">"cudart"</span>)])
+mod = Program(SRC, <span class="s">"c++"</span>, opts).compile(<span class="s">"cubin"</span>)      <span class="c"># SASS: no PTX JIT at load</span>
+scale, add, set_handle, loop_kernel = (
+    mod.get_kernel(k) <span class="k">for</span> k <span class="k">in</span> (<span class="s">"scale"</span>, <span class="s">"add"</span>, <span class="s">"set_handle"</span>, <span class="s">"loop_kernel"</span>))
+
+N = 1 &lt;&lt; 20
+n = np.uint64(N)                           <span class="c"># size_t argument: use a NumPy type</span>
+cfg = LaunchConfig(grid=(N + 255) // 256, block=256)
+one = LaunchConfig(grid=1, block=1)
+x = dev.allocate(N * 4, stream=s)</pre><pre data-p="pyb" hidden><span class="k">import</span> ctypes
+<span class="k">import</span> numpy <span class="k">as</span> np
+<span class="k">from</span> cuda.bindings <span class="k">import</span> driver <span class="k">as</span> cu, nvrtc
+<span class="k">from</span> cuda.pathfinder <span class="k">import</span> find_nvidia_header_directory
+
+
+<span class="k">def</span> ck(result):
+    <span class="s">"""Raise on error; return the other outputs of a cuda.bindings call."""</span>
+    err, *out = result
+    <span class="k">if</span> isinstance(err, cu.CUresult) <span class="k">and</span> err != cu.CUresult.CUDA_SUCCESS:
+        raise RuntimeError(cu.cuGetErrorName(err)[1].decode())
+    <span class="k">if</span> isinstance(err, nvrtc.nvrtcResult) <span class="k">and</span> err != nvrtc.nvrtcResult.NVRTC_SUCCESS:
+        raise RuntimeError(nvrtc.nvrtcGetErrorString(err)[1].decode())
+    <span class="k">return</span> out[0] <span class="k">if</span> len(out) == 1 <span class="k">else</span> (tuple(out) <span class="k">or</span> <span class="k">None</span>)
+
+
+ck(cu.cuInit(0))
+dev = ck(cu.cuDeviceGet(0))
+ctx = ck(cu.cuDevicePrimaryCtxRetain(dev))
+ck(cu.cuCtxSetCurrent(ctx))
+s = ck(cu.cuStreamCreate(cu.CUstream_flags.CU_STREAM_NON_BLOCKING.value))
+GLOBAL = cu.CUstreamCaptureMode.CU_STREAM_CAPTURE_MODE_GLOBAL
+major = ck(cu.cuDeviceGetAttribute(
+    cu.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev))
+minor = ck(cu.cuDeviceGetAttribute(
+    cu.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev))
+ARCH = <span class="s">f"sm_{major}{minor}"</span>
+
+SRC = <span class="s">rb"""
+#include &lt;cuda_device_runtime_api.h&gt;
+extern "C" __global__ void scale(float* x, float a, size_t n) {
+  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+  if (i &lt; n) x[i] *= a;
+}
+extern "C" __global__ void add(float* x, float b, size_t n) {
+  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;
+  if (i &lt; n) x[i] += b;
+}
+extern "C" __global__ void set_handle(cudaGraphConditionalHandle h, const int* v) {
+  cudaGraphSetConditional(h, *v);
+}
+extern "C" __global__ void loop_kernel(cudaGraphConditionalHandle h, int* count) {
+  if (--(*count) == 0) cudaGraphSetConditional(h, 0);
+}
+"""</span>
+prog = ck(nvrtc.nvrtcCreateProgram(SRC, <span class="s">b"kernels.cu"</span>, 0, [], []))
+opts = [<span class="s">f"--gpu-architecture={ARCH}"</span>.encode(),           <span class="c"># sm_XX: SASS, no PTX JIT</span>
+        <span class="s">b"-I"</span> + find_nvidia_header_directory(<span class="s">"cudart"</span>).encode()]
+ck(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
+cubin = bytearray(ck(nvrtc.nvrtcGetCUBINSize(prog)))
+ck(nvrtc.nvrtcGetCUBIN(prog, cubin))
+mod = ck(cu.cuModuleLoadData(bytes(cubin)))
+scale, add, set_handle, loop_kernel = (
+    ck(cu.cuModuleGetFunction(mod, k)) <span class="k">for</span> k <span class="k">in</span> (<span class="s">b"scale"</span>, <span class="s">b"add"</span>, <span class="s">b"set_handle"</span>, <span class="s">b"loop_kernel"</span>))
+
+N = 1 &lt;&lt; 20
+GRID, BLOCK = (N + 255) // 256, 256
+x = ck(cu.cuMemAlloc(N * 4))
+PTR_F32_SIZE = (<span class="k">None</span>, ctypes.c_float, ctypes.c_size_t)   <span class="c"># (float*, float, size_t)</span>
+
+
+<span class="k">def</span> kparams(func, grid, block, values, types):
+    <span class="s">"""CUDA_KERNEL_NODE_PARAMS for cuGraphAddKernelNode / ...SetParams."""</span>
+    p = cu.CUDA_KERNEL_NODE_PARAMS()
+    p.func = func
+    p.gridDimX, p.gridDimY, p.gridDimZ = grid, 1, 1
+    p.blockDimX, p.blockDimY, p.blockDimZ = block, 1, 1
+    p.sharedMemBytes = 0
+    p.kernelParams = (values, types)        <span class="c"># copied when the node is created</span>
+    <span class="k">return</span> p</pre></div>
+  <div class="notes">
+  <div class="note caution"><span class="tag">Caution</span><div>Compile to <code>cubin</code> for the device architecture. NVRTC 13.5 makes PTX 9.5. A CUDA 13.2 driver cannot JIT it: the module load fails with <code>CUDA_ERROR_UNSUPPORTED_PTX_VERSION</code>.</div></div>
+  <div class="note caution"><span class="tag">Caution</span><div>Give each kernel argument its exact C type. <code>cuda.core</code> packs a Python <code>float</code> as an 8-byte double: a <code>float</code> parameter reads 4 of those bytes, so <code>2.0</code> arrives as <code>0.0</code>, with no error. Pass <code>np.float32</code>. In <code>cuda.bindings</code>, each value has a ctypes type in the <code>(values, types)</code> tuple. <code>None</code> means a bindings object, such as <code>CUdeviceptr</code> or a conditional handle.</div></div>
+  <div class="note info"><span class="tag">Note</span><div><code>cudaGraphSetConditional</code> and device-side <code>cudaGraphLaunch</code> are declared in <code>cuda_device_runtime_api.h</code>. That header needs <code>crt/host_defines.h</code>, so install both the <code>cudart</code> and <code>crt</code> extras.</div></div>
+  </div>
+
 </section>
 
 <!-- 03 -->
@@ -433,6 +620,50 @@ p.kernel.blockDim     = dim3(256);
 p.kernel.kernelParams = args;               <span class="c">// copied now, not at launch</span>
 cudaGraphAddNode(&amp;k, graph, deps, <span class="k">/*edgeData=*/</span>NULL, nDeps, &amp;p);
 p = {};                                     <span class="c">// zero again before the next node</span></pre></div>
+  <h3>Example: a four-node diamond</h3>
+  <div class="prose"><p>This is the graph API example from the guide: A, then B and C in parallel, then D. In <code>cuda.core</code>, <code>node.launch()</code> adds a node that depends on <code>node</code>, and <code>pred.add()</code> adds a second incoming edge. <code>join()</code> also works, but it adds an empty node. In <code>cuda.bindings</code>, <code>cuGraphAddKernelNode</code> takes the dependency list. B and C write different buffers: they run in parallel, so two <code>+=</code> on one buffer is a race.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Explicit graph: A &rarr; {B, C} &rarr; D</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaGraph_t graph;
+cudaGraphCreate(&amp;graph, 0);                           <span class="c">// starts empty</span>
+
+cudaGraphNode_t nodes[4];
+cudaGraphNodeParams kParams = { cudaGraphNodeTypeKernel };
+kParams.kernel.func     = (void*)kernelName;
+kParams.kernel.gridDim  = dim3(1);
+kParams.kernel.blockDim = dim3(1);
+
+cudaGraphAddNode(&amp;nodes[0], graph, NULL,      NULL, 0, &amp;kParams);  <span class="c">// A</span>
+cudaGraphAddNode(&amp;nodes[1], graph, &amp;nodes[0], NULL, 1, &amp;kParams);  <span class="c">// A -&gt; B</span>
+cudaGraphAddNode(&amp;nodes[2], graph, &amp;nodes[0], NULL, 1, &amp;kParams);  <span class="c">// A -&gt; C</span>
+cudaGraphAddNode(&amp;nodes[3], graph, &amp;nodes[1], NULL, 2, &amp;kParams);  <span class="c">// B, C -&gt; D</span>
+
+cudaGraphInstantiate(&amp;exec, graph, 0);
+cudaGraphLaunch(exec, stream);</pre><pre data-p="py" hidden><span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphDefinition
+
+y = dev.allocate(N * 4, stream=s)                      <span class="c"># C writes y: B and C run in parallel</span>
+g = GraphDefinition()                                   <span class="c"># cudaGraphCreate</span>
+a = g.launch(cfg, scale, x, np.float32(2), n)           <span class="c"># root: no dependencies</span>
+b = a.launch(cfg, add, x, np.float32(1), n)             <span class="c"># edge a -&gt; b</span>
+c = a.launch(cfg, add, y, np.float32(1), n)             <span class="c"># edge a -&gt; c</span>
+d = b.launch(cfg, scale, x, np.float32(2), n)           <span class="c"># edge b -&gt; d</span>
+d.pred.add(c)                                           <span class="c"># edge c -&gt; d (no empty node)</span>
+
+<span class="k">assert</span> len(g.nodes()) == 4 <span class="k">and</span> len(g.edges()) == 4
+exe = g.instantiate()                                   <span class="c"># cudaGraphInstantiate</span>
+exe.launch(s)                                           <span class="c"># cudaGraphLaunch</span></pre><pre data-p="pyb" hidden>y = ck(cu.cuMemAlloc(N * 4))                                  <span class="c"># C writes y: B and C run in parallel</span>
+graph = ck(cu.cuGraphCreate(0))                               <span class="c"># starts empty</span>
+p2 = kparams(scale, GRID, BLOCK, (x, 2.0, N), PTR_F32_SIZE)
+p1 = kparams(add,   GRID, BLOCK, (x, 1.0, N), PTR_F32_SIZE)
+
+a = ck(cu.cuGraphAddKernelNode(graph, <span class="k">None</span>, 0, p2))           <span class="c"># A</span>
+b = ck(cu.cuGraphAddKernelNode(graph, [a], 1, p1))            <span class="c"># A -&gt; B</span>
+c = ck(cu.cuGraphAddKernelNode(graph, [a], 1,
+                               kparams(add, GRID, BLOCK, (y, 1.0, N), PTR_F32_SIZE)))  <span class="c"># A -&gt; C</span>
+d = ck(cu.cuGraphAddKernelNode(graph, [b, c], 2, p2))         <span class="c"># B, C -&gt; D</span>
+
+nodes, count = ck(cu.cuGraphGetNodes(graph, 0))
+<span class="k">assert</span> count == 4
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+ck(cu.cuGraphLaunch(exe, s))</pre></div>
   <h3>Edge data</h3>
   <div class="prose"><p>Since CUDA 12.3, an edge can carry data: an outgoing port, an incoming port, and a type. Zero data is a full dependency with memory synchronization. The only non-default type is <code>cudaGraphDependencyTypeProgrammatic</code>. It gives Programmatic Dependent Launch (PDL) between two kernel nodes.</p></div>
   <div class="tbl"><table>
@@ -497,6 +728,60 @@ p = {};                                     <span class="c">// zero again before
   </svg></div>
   <figcaption><b>Figure 3.</b> The events do not become nodes. They become edges. B and C can run in parallel at replay, on any hardware queue.</figcaption>
   </figure>
+  <h3>Example: fork and join</h3>
+  <div class="prose"><p>The <code>cuda.bindings</code> tab keeps the guide's structure: events fork <code>s2</code> from the origin stream and join it back. The <code>cuda.core</code> tab does the same with <code>split()</code> and <code>join()</code>. Both graphs have 4 nodes and 4 edges. Event record and wait calls make no nodes.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Cross-stream capture</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaStreamBeginCapture(stream1, cudaStreamCaptureModeGlobal);  <span class="c">// origin stream</span>
+
+kernel_A&lt;&lt;&lt;grid, block, 0, stream1&gt;&gt;&gt;(...);
+
+cudaEventRecord(event1, stream1);                     <span class="c">// fork into stream2</span>
+cudaStreamWaitEvent(stream2, event1);
+
+kernel_B&lt;&lt;&lt;grid, block, 0, stream1&gt;&gt;&gt;(...);
+kernel_C&lt;&lt;&lt;grid, block, 0, stream2&gt;&gt;&gt;(...);
+
+cudaEventRecord(event2, stream2);                     <span class="c">// join stream2 back</span>
+cudaStreamWaitEvent(stream1, event2);
+
+kernel_D&lt;&lt;&lt;grid, block, 0, stream1&gt;&gt;&gt;(...);
+
+cudaStreamEndCapture(stream1, &amp;graph);                <span class="c">// both streams leave capture</span></pre><pre data-p="py" hidden><span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphBuilder
+
+y = dev.allocate(N * 4, stream=s)                       <span class="c"># C writes y, not x</span>
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)  <span class="c"># default mode is "relaxed"</span>
+launch(gb, cfg, scale, x, np.float32(2), n)             <span class="c"># A</span>
+left, right = gb.split(2)                               <span class="c"># fork: left is gb itself</span>
+launch(left, cfg, add, x, np.float32(1), n)             <span class="c"># B</span>
+launch(right, cfg, add, y, np.float32(1), n)            <span class="c"># C</span>
+gb = GraphBuilder.join(left, right)                     <span class="c"># join</span>
+launch(gb, cfg, scale, x, np.float32(2), n)             <span class="c"># D</span>
+gb.end_building()
+
+print(len(gb.graph_definition.nodes()))                 <span class="c"># check the node count</span>
+graph = gb.complete()
+graph.launch(s)</pre><pre data-p="pyb" hidden>y = ck(cu.cuMemAlloc(N * 4))                                  <span class="c"># C writes y, not x</span>
+s2 = ck(cu.cuStreamCreate(cu.CUstream_flags.CU_STREAM_NON_BLOCKING.value))
+fork = ck(cu.cuEventCreate(cu.CUevent_flags.CU_EVENT_DISABLE_TIMING.value))
+join = ck(cu.cuEventCreate(cu.CUevent_flags.CU_EVENT_DISABLE_TIMING.value))
+
+<span class="k">def</span> k(f, stream, ptr, v):
+    ck(cu.cuLaunchKernel(f, GRID, 1, 1, BLOCK, 1, 1, 0, stream,
+                         ((ptr, v, N), PTR_F32_SIZE), 0))
+
+ck(cu.cuStreamBeginCapture(s, GLOBAL))                        <span class="c"># s is the origin stream</span>
+k(scale, s, x, 2.0)                                           <span class="c"># A</span>
+ck(cu.cuEventRecord(fork, s)); ck(cu.cuStreamWaitEvent(s2, fork, 0))   <span class="c"># fork</span>
+k(add, s, x, 1.0)                                             <span class="c"># B on s</span>
+k(add, s2, y, 1.0)                                            <span class="c"># C on s2</span>
+ck(cu.cuEventRecord(join, s2)); ck(cu.cuStreamWaitEvent(s, join, 0))   <span class="c"># join</span>
+k(scale, s, x, 2.0)                                           <span class="c"># D</span>
+graph = ck(cu.cuStreamEndCapture(s))                          <span class="c"># s and s2 leave capture</span>
+
+nodes, count = ck(cu.cuGraphGetNodes(graph, 0))               <span class="c"># events make no nodes</span>
+<span class="k">assert</span> count == 4
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+ck(cu.cuGraphLaunch(exe, s))</pre></div>
   <h3>Capture introspection</h3>
   <div class="prose"><p><code>cudaStreamGetCaptureInfo()</code> returns the status, a capture ID that is unique in the process, the capture graph, and the dependency set for the next node. Use it to get the handles of the last captured nodes. <code>cudaStreamUpdateCaptureDependencies()</code> adds to (default) or replaces that set. Data other than the status is valid only if the call succeeds and the status is Active.</p></div>
   <div class="note caution"><span class="tag">Caution</span><div>When a stream leaves capture mode, the next non-captured item in the stream still depends on the last non-captured item before capture. Capture cuts the dependency only for the items in the capture.</div></div>
@@ -538,11 +823,29 @@ p = {};                                     <span class="c">// zero again before
       <button class="chip" data-g="op" data-v="legacy" aria-pressed="false">work on legacy stream</button></div>
     <div class="simout" id="simOut" aria-live="polite"></div>
   </div>
-  <div class="code"><div class="bar"><span>Library pattern: allow one unsafe call during capture</span><span>C++</span></div><pre>cudaStreamCaptureMode m = cudaStreamCaptureModeRelaxed;
+  <div class="code" data-tabs><div class="bar"><span>Library pattern: allow one unsafe call during capture</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaStreamCaptureMode m = cudaStreamCaptureModeRelaxed;
 cudaThreadExchangeStreamCaptureMode(&amp;m);     <span class="c">// push: m now holds the old mode</span>
 cudaMalloc(&amp;p, bytes);                       <span class="c">// runs now, at capture time; NOT a graph node</span>
-cudaThreadExchangeStreamCaptureMode(&amp;m);     <span class="c">// pop: restore the old mode</span></pre></div>
+cudaThreadExchangeStreamCaptureMode(&amp;m);     <span class="c">// pop: restore the old mode</span></pre><pre data-p="py" hidden><span class="k">from</span> cuda.core <span class="k">import</span> LegacyPinnedMemoryResource
+<span class="k">from</span> cuda.bindings <span class="k">import</span> driver <span class="k">as</span> cu      <span class="c"># cuda.core has no capture-mode API</span>
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+launch(gb, cfg, add, x, np.float32(1), n)
+
+RELAXED = cu.CUstreamCaptureMode.CU_STREAM_CAPTURE_MODE_RELAXED
+old = cu.cuThreadExchangeStreamCaptureMode(RELAXED)[1]     <span class="c"># push</span>
+staging = LegacyPinnedMemoryResource().allocate(1 &lt;&lt; 20)   <span class="c"># runs now; not a node</span>
+cu.cuThreadExchangeStreamCaptureMode(old)                  <span class="c"># pop</span>
+
+launch(gb, cfg, add, x, np.float32(1), n)
+gb.end_building()                    <span class="c"># the capture is still valid: 2 kernel nodes</span></pre><pre data-p="pyb" hidden><span class="c"># ... inside a Global capture on s (see 04) ...</span>
+RELAXED = cu.CUstreamCaptureMode.CU_STREAM_CAPTURE_MODE_RELAXED
+old = ck(cu.cuThreadExchangeStreamCaptureMode(RELAXED))      <span class="c"># push</span>
+p = ck(cu.cuMemAlloc(1 &lt;&lt; 20))           <span class="c"># runs now, at capture time; not a node</span>
+ck(cu.cuThreadExchangeStreamCaptureMode(old))                 <span class="c"># pop</span></pre></div>
   <div class="note caution"><span class="tag">Caution</span><div>Relaxed mode permits the call, but the call is not recorded. A <code>cudaMalloc</code> runs one time, at capture. Replay uses the same address. If the memory must be new at each launch, use <code>cudaMallocAsync</code> in the capture. That makes a memory node.</div></div>
+  <div class="note caution"><span class="tag">Caution</span><div><code>GraphBuilder.begin_building()</code> uses <code>"relaxed"</code> mode by default. The C++ examples in the guide use Global. Relaxed mode does not detect unsafe calls in this thread. Pass <code>"global"</code> while you develop, so that CUDA reports them. <code>cuda.core</code> has no capture-mode API: use <code>cuThreadExchangeStreamCaptureMode</code> from <code>cuda.bindings</code>.</div></div>
+
 </section>
 
 <!-- 06 -->
@@ -590,13 +893,51 @@ cudaThreadExchangeStreamCaptureMode(&amp;m);     <span class="c">// pop: restore
     </tbody>
   </table></div>
   <div class="note info"><span class="tag">Rule</span><div>CUDA prefers to return an error than to ignore a dependency between captured and non-captured work. The one exception is the mode change itself. Begin and End cut the dependency between items before and after the change.</div></div>
+  <h3>Recover from an invalidated capture</h3>
+  <div class="prose"><p>A prohibited call returns 900 and invalidates the capture. The capture stays open until you end it. In <code>cuda.bindings</code>, <code>cuStreamEndCapture</code> ends it, returns 901, and gives no graph. In <code>cuda.core</code>, the builder ends it when Python frees the builder.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Detect, end, capture again</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaStreamBeginCapture(s, cudaStreamCaptureModeGlobal);
+kernel&lt;&lt;&lt;grid, block, 0, s&gt;&gt;&gt;(...);
+
+cudaError_t e = cudaMalloc(&amp;p, 1024);  <span class="c">// cudaErrorStreamCaptureUnsupported (900)</span>
+                                       <span class="c">// the capture is now invalidated</span>
+cudaStreamCaptureStatus st;
+cudaStreamGetCaptureInfo(s, &amp;st);      <span class="c">// cudaStreamCaptureStatusInvalidated</span>
+
+e = cudaStreamEndCapture(s, &amp;graph);   <span class="c">// cudaErrorStreamCaptureInvalidated (901)</span>
+                                       <span class="c">// graph == NULL; s leaves capture</span>
+cudaGetLastError();                    <span class="c">// clear the error before you retry</span></pre><pre data-p="py" hidden><span class="k">from</span> cuda.core <span class="k">import</span> LegacyPinnedMemoryResource
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+launch(gb, cfg, add, x, np.float32(1), n)
+<span class="k">try</span>:
+    LegacyPinnedMemoryResource().allocate(1024)    <span class="c"># prohibited in Global mode</span>
+<span class="k">except</span> Exception <span class="k">as</span> e:
+    print(e)                                       <span class="c"># CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED</span>
+<span class="k">try</span>:
+    gb.end_building()                              <span class="c"># raises RuntimeError: invalidated</span>
+<span class="k">except</span> RuntimeError:
+    <span class="k">del</span> gb                                         <span class="c"># drop it NOW: its finalizer ends</span>
+                                                   <span class="c"># the capture on s</span>
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)    <span class="c"># capture again</span>
+launch(gb, cfg, add, x, np.float32(1), n)
+gb.end_building()</pre><pre data-p="pyb" hidden>ck(cu.cuStreamBeginCapture(s, GLOBAL))
+ck(cu.cuLaunchKernel(add, GRID, 1, 1, BLOCK, 1, 1, 0, s, ((x, 1.0, N), PTR_F32_SIZE), 0))
+
+err, p = cu.cuMemAlloc(1024)                 <span class="c"># prohibited in Global mode</span>
+print(err)                                   <span class="c"># CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED (900)</span>
+st = cu.cuStreamGetCaptureInfo(s)[1]         <span class="c"># CU_STREAM_CAPTURE_STATUS_INVALIDATED</span>
+
+err, graph = cu.cuStreamEndCapture(s)        <span class="c"># CUDA_ERROR_STREAM_CAPTURE_INVALIDATED (901)</span>
+<span class="k">assert</span> graph <span class="k">is</span> <span class="k">None</span> <span class="k">or</span> int(graph) == 0      <span class="c"># no graph; s has left capture</span></pre></div>
+  <div class="note caution"><span class="tag">Caution</span><div>In <code>cuda.core</code> 1.2.2, <code>end_building()</code> raises <code>RuntimeError</code> on an invalidated capture and leaves the stream in capture. <code>close()</code> raises too, and the builder stays open. Drop every reference to the failed builder (<code>del gb</code>) before you begin a new capture on that stream. If the failed builder is still alive, it ends the next capture when Python frees it: <code>end_building()</code> then fails with "Graph builder is not building". If Python frees it after the next capture ends, that graph becomes invalid (<code>CUDA_ERROR_INVALID_VALUE</code>).</div></div>
+
 </section>
 
 <!-- 07 -->
 <section id="exec">
   <div class="eyebrow"><b>07</b> · Execution</div>
   <h2>Instantiate, upload, launch</h2>
-  <div class="code"><div class="bar"><span>Full cycle</span><span>C++</span></div><pre>cudaStreamBeginCapture(s, cudaStreamCaptureModeGlobal);
+  <div class="code" data-tabs><div class="bar"><span>Full cycle</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaStreamBeginCapture(s, cudaStreamCaptureModeGlobal);
 step(s);                                        <span class="c">// kernels, copies, library calls</span>
 cudaStreamEndCapture(s, &amp;graph);                <span class="c">// check the return code and graph != NULL</span>
 
@@ -606,7 +947,23 @@ ip.uploadStream = s;                            <span class="c">// upload now, i
 cudaGraphInstantiateWithParams(&amp;exec, graph, &amp;ip);
 <span class="k">if</span> (ip.result_out != cudaGraphInstantiateSuccess) { <span class="c">/* ip.errNode_out names the node */</span> }
 
-<span class="k">for</span> (;;) cudaGraphLaunch(exec, s);              <span class="c">// same stream each time</span></pre></div>
+<span class="k">for</span> (;;) cudaGraphLaunch(exec, s);              <span class="c">// same stream each time</span></pre><pre data-p="py" hidden><span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphCompleteOptions
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+step(gb)                                     <span class="c"># kernels, copies, library calls</span>
+gb.end_building()                            <span class="c"># raises if the capture is invalid</span>
+
+graph = gb.complete(GraphCompleteOptions(upload_stream=s))   <span class="c"># instantiate + upload</span>
+<span class="k">for</span> _ <span class="k">in</span> range(100):
+    graph.launch(s)                          <span class="c"># same stream each time</span></pre><pre data-p="pyb" hidden><span class="c"># graph: a CUgraph from cuStreamEndCapture (see 04)</span>
+ip = cu.CUDA_GRAPH_INSTANTIATE_PARAMS()
+ip.flags = cu.CUgraphInstantiate_flags.CUDA_GRAPH_INSTANTIATE_FLAG_UPLOAD
+ip.hUploadStream = s                         <span class="c"># upload now, into the launch stream</span>
+err, exe = cu.cuGraphInstantiateWithParams(graph, ip)
+<span class="k">if</span> ip.result_out != cu.CUgraphInstantiateResult.CUDA_GRAPH_INSTANTIATE_SUCCESS:
+    print(ip.result_out, ip.hErrNode_out)    <span class="c"># the node that failed</span>
+<span class="k">for</span> _ <span class="k">in</span> range(100):
+    ck(cu.cuGraphLaunch(exe, s))             <span class="c"># same stream each time</span></pre></div>
   <div class="tbl"><table>
     <thead><tr><th>Instantiate flag</th><th>Effect</th><th>Constraint</th></tr></thead>
     <tbody>
@@ -644,6 +1001,62 @@ cudaGraphInstantiateWithParams(&amp;exec, graph, &amp;ip);
     <div class="row" id="updRow"></div>
     <div class="simout" id="updOut" aria-live="polite"></div>
   </div>
+  <h3>Whole graph update loop</h3>
+  <div class="prose"><p>This is the guide's update loop. Capture each iteration. Try to update the executable graph. If the update fails, destroy it and instantiate again. In the Python tests, iterations 0 and 5 instantiate, because the topology changes at iteration 5. The other 8 iterations update.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Capture, update, or instantiate again</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaGraphExec_t exec = NULL;
+
+<span class="k">for</span> (int i = 0; i &lt; 10; i++) {
+    cudaGraph_t graph;
+    cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+    do_cuda_work(stream);
+    cudaStreamEndCapture(stream, &amp;graph);
+
+    cudaGraphExecUpdateResultInfo info;               <span class="c">// info.result, info.errorNode</span>
+    <span class="k">bool</span> updated = exec != NULL &amp;&amp;
+                   cudaGraphExecUpdate(exec, graph, &amp;info) == cudaSuccess;
+    <span class="k">if</span> (!updated) {
+        cudaGetLastError();                           <span class="c">// clear the update error</span>
+        <span class="k">if</span> (exec != NULL) cudaGraphExecDestroy(exec);
+        cudaGraphInstantiate(&amp;exec, graph, 0);
+    }
+    cudaGraphDestroy(graph);
+    cudaGraphLaunch(exec, stream);
+    cudaStreamSynchronize(stream);
+}</pre><pre data-p="py" hidden>exe = <span class="k">None</span>
+<span class="k">for</span> i <span class="k">in</span> range(10):
+    gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+    do_cuda_work(gb, i)                       <span class="c"># user stream-based workload</span>
+    gb.end_building()
+
+    updated = <span class="k">False</span>
+    <span class="k">if</span> exe <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        <span class="k">try</span>:
+            exe.update(gb)                    <span class="c"># cudaGraphExecUpdate</span>
+            updated = <span class="k">True</span>
+        <span class="k">except</span> Exception:                     <span class="c"># e.g. ..._ERROR_TOPOLOGY_CHANGED</span>
+            exe.close()                       <span class="c"># cudaGraphExecDestroy</span>
+    <span class="k">if</span> <span class="k">not</span> updated:
+        exe = gb.complete()                   <span class="c"># cudaGraphInstantiate</span>
+    gb.close()                                <span class="c"># cudaGraphDestroy</span>
+    exe.launch(s)
+    s.sync()</pre><pre data-p="pyb" hidden>exe = <span class="k">None</span>
+<span class="k">for</span> i <span class="k">in</span> range(10):
+    ck(cu.cuStreamBeginCapture(s, GLOBAL))
+    do_cuda_work(s, i)                            <span class="c"># user stream-based workload</span>
+    graph = ck(cu.cuStreamEndCapture(s))
+
+    updated = <span class="k">False</span>
+    <span class="k">if</span> exe <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        err, info = cu.cuGraphExecUpdate(exe, graph)   <span class="c"># info.result, info.errorNode</span>
+        updated = err == cu.CUresult.CUDA_SUCCESS
+    <span class="k">if</span> <span class="k">not</span> updated:
+        <span class="k">if</span> exe <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            ck(cu.cuGraphExecDestroy(exe))
+        exe = ck(cu.cuGraphInstantiate(graph, 0))
+    ck(cu.cuGraphDestroy(graph))
+    ck(cu.cuGraphLaunch(exe, s))
+    ck(cu.cuStreamSynchronize(s))</pre></div>
+  <div class="note info"><span class="tag">Note</span><div>The guide calls <code>cudaGraphExecUpdate(exec, graph, &amp;errorNode, &amp;result)</code>. That 4-argument form is a C++ inline wrapper in <code>cuda_runtime.h</code>. The API itself takes <code>cudaGraphExecUpdateResultInfo*</code>, as shown here, and C code must use that form. In <code>cuda.bindings</code>, <code>cuGraphExecUpdate(exec, graph)</code> returns <code>(err, resultInfo)</code>.</div></div>
   <h3>Whole graph update: node pairing</h3>
   <div class="prose"><p><code>cudaGraphExecUpdate</code> pairs nodes of the old and new graph by the order of API calls. To get a deterministic pairing, obey these rules:</p></div>
   <ol class="steps">
@@ -654,13 +1067,41 @@ cudaGraphInstantiateWithParams(&amp;exec, graph, &amp;ip);
   <div class="note caution"><span class="tag">Caution</span><div>If threads issue captured work in a different order on each iteration, the update fails with <code>TopologyChanged</code>, even if the final graph looks the same. On failure, destroy the exec and instantiate again.</div></div>
   <h3>Pattern: capture plus one explicit node</h3>
   <div class="prose"><p>NVIDIA shows a combined method for a kernel whose arguments change on each launch. Capture the static kernels. Add the dynamic kernel explicitly, inside the capture, and keep its handle.</p></div>
-  <div class="code"><div class="bar"><span>Insert an explicit node into a live capture</span><span>C++</span></div><pre>cudaStreamCaptureStatus st; cudaGraph_t g; const cudaGraphNode_t* deps; size_t n;
+  <div class="code" data-tabs><div class="bar"><span>Insert an explicit node into a live capture</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaStreamCaptureStatus st; cudaGraph_t g; const cudaGraphNode_t* deps; size_t n;
 cudaStreamGetCaptureInfo(s, &amp;st, NULL, &amp;g, &amp;deps, NULL, &amp;n);
 cudaGraphAddNode(&amp;dyn, g, deps, NULL, n, &amp;kernelParams);   <span class="c">// keep 'dyn'</span>
 cudaStreamUpdateCaptureDependencies(s, &amp;dyn, NULL, 1,
                                     cudaStreamSetCaptureDependencies);
 <span class="c">// ... continue capture, end, instantiate. Before each launch:</span>
-cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
+cudaGraphExecNodeSetParams(exec, dyn, &amp;newParams);   <span class="c">// takes cudaGraphNodeParams, like AddNode</span></pre><pre data-p="py" hidden>gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+launch(gb, cfg, scale, x, np.float32(2), n)          <span class="c"># static, captured work</span>
+gb.end_building()
+
+g = gb.graph_definition                               <span class="c"># explicit view of the capture</span>
+(tail,) = g.nodes()
+dyn = tail.launch(cfg, add, x, np.float32(0), n)      <span class="c"># explicit node; keep 'dyn'</span>
+exe = gb.complete()
+
+<span class="k">for</span> step <span class="k">in</span> range(3):
+    exe[dyn].update(config=cfg, kernel=add,           <span class="c"># cudaGraphExecKernelNodeSetParams</span>
+                    args=(x, np.float32(step), n))
+    exe.launch(s)</pre><pre data-p="pyb" hidden>ck(cu.cuStreamBeginCapture(s, GLOBAL))
+ck(cu.cuLaunchKernel(scale, GRID, 1, 1, BLOCK, 1, 1, 0, s,
+                     ((x, 2.0, N), PTR_F32_SIZE), 0))       <span class="c"># static, captured work</span>
+
+st, cid, g, deps, edata, ndeps = ck(cu.cuStreamGetCaptureInfo(s))
+dyn = ck(cu.cuGraphAddKernelNode(g, deps, ndeps,           <span class="c"># explicit node; keep 'dyn'</span>
+                                 kparams(add, GRID, BLOCK, (x, 0.0, N), PTR_F32_SIZE)))
+ck(cu.cuStreamUpdateCaptureDependencies(
+    s, [dyn], <span class="k">None</span>, 1,
+    cu.CUstreamUpdateCaptureDependencies_flags.CU_STREAM_SET_CAPTURE_DEPENDENCIES))
+graph = ck(cu.cuStreamEndCapture(s))
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+
+<span class="k">for</span> step <span class="k">in</span> range(3):
+    ck(cu.cuGraphExecKernelNodeSetParams(
+        exe, dyn, kparams(add, GRID, BLOCK, (x, float(step), N), PTR_F32_SIZE)))
+    ck(cu.cuGraphLaunch(exe, s))</pre></div>
   <div class="tbl"><table>
     <thead><tr><th>Method (A100, launch-bound workload)</th><th>Time</th><th>Speedup</th></tr></thead>
     <tbody>
@@ -670,6 +1111,8 @@ cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
     </tbody>
   </table></div>
   <div class="note info"><span class="tag">Note</span><div>The third option is <em>indirection</em>. The kernel reads its changing value from device memory, and you write that memory before the launch. Then no update is necessary. llama.cpp PR #9017 used this method for its KV-cache copy kernels and measured about 1–2% gain.</div></div>
+  <div class="note info"><span class="tag">Note</span><div>The <code>cuda.bindings</code> tab follows the C++ code: it adds the node into the live capture. The <code>cuda.core</code> tab adds the node after the capture ends, through <code>gb.graph_definition</code>. <code>exe[node]</code> returns a view of that node in the executable graph. The view has <code>update()</code>, <code>disable()</code>, and <code>enable()</code>.</div></div>
+
 </section>
 
 <!-- 09 -->
@@ -723,6 +1166,159 @@ cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
   </svg></div>
   <figcaption><b>Figure 5.</b> CUDA makes the empty body graphs when you add the node. Fill them with the Graph API or with <code>cudaStreamBeginCaptureToGraph</code>. Conditional nodes can nest.</figcaption>
   </figure>
+  <h3>Examples: IF and WHILE</h3>
+  <div class="prose"><p>These follow the guide's IF and WHILE examples. In <code>cuda.core</code>, pass the <code>GraphCondition</code> as a kernel argument; the launcher gives the kernel the raw handle. In <code>cuda.bindings</code>, the conditional node needs <code>conditional.ctx</code>, and <code>phGraph_out</code> holds the body graphs after <code>cuGraphAddNode</code>.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>IF node, explicit API</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp"><span class="k">__global__</span> void setHandle(cudaGraphConditionalHandle handle, int value) {
+    cudaGraphSetConditional(handle, value);
+}
+
+cudaGraphCreate(&amp;graph, 0);
+cudaGraphConditionalHandle handle;
+cudaGraphConditionalHandleCreate(&amp;handle, graph);     <span class="c">// no default: undefined</span>
+
+void* args[] = { &amp;handle, &amp;value };
+cudaGraphNodeParams k = { cudaGraphNodeTypeKernel };
+k.kernel.func         = (void*)setHandle;
+k.kernel.gridDim      = k.kernel.blockDim = dim3(1);
+k.kernel.kernelParams = args;
+cudaGraphAddNode(&amp;node, graph, NULL, NULL, 0, &amp;k);    <span class="c">// sets the value</span>
+
+cudaGraphNodeParams c = { cudaGraphNodeTypeConditional };
+c.conditional.handle = handle;
+c.conditional.type   = cudaGraphCondTypeIf;
+c.conditional.size   = 1;                             <span class="c">// "if" body only</span>
+cudaGraphAddNode(&amp;node, graph, &amp;node, NULL, 1, &amp;c);
+
+cudaGraph_t body = c.conditional.phGraph_out[0];      <span class="c">// populate the body</span>
+cudaGraphAddNode(&amp;bodyNode, body, NULL, NULL, 0, &amp;work);
+
+cudaGraphInstantiate(&amp;exec, graph, 0);
+cudaGraphLaunch(exec, stream);</pre><pre data-p="py" hidden><span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphDefinition
+
+flag = dev.allocate(4, stream=s)             <span class="c"># int32 on the device: 1 = run the body</span>
+flag.fill(np.int32(1), stream=s)
+
+g = GraphDefinition()
+cond = g.create_condition()                  <span class="c"># no default: undefined at each launch</span>
+k = g.launch(one, set_handle, cond, flag)    <span class="c"># upstream kernel sets the value</span>
+node = k.if_then(cond)                       <span class="c"># IF node, size 1, depends on k</span>
+node.then.launch(cfg, add, x, np.float32(1), n)   <span class="c"># populate the body graph</span>
+
+exe = g.instantiate()
+exe.launch(s)</pre><pre data-p="pyb" hidden>graph = ck(cu.cuGraphCreate(0))
+flag = ck(cu.cuMemAlloc(4))                       <span class="c"># int32 on the device: 1 = run the body</span>
+ck(cu.cuMemsetD32(flag, 1, 1))
+handle = ck(cu.cuGraphConditionalHandleCreate(graph, ctx, 0, 0))   <span class="c"># no default</span>
+
+k = ck(cu.cuGraphAddKernelNode(graph, <span class="k">None</span>, 0, kparams(
+    set_handle, 1, 1, (handle, flag), (<span class="k">None</span>, <span class="k">None</span>))))  <span class="c"># sets the value</span>
+
+cp = cu.CUgraphNodeParams()
+cp.type = cu.CUgraphNodeType.CU_GRAPH_NODE_TYPE_CONDITIONAL
+cp.conditional.handle = handle
+cp.conditional.type = cu.CUgraphConditionalNodeType.CU_GRAPH_COND_TYPE_IF
+cp.conditional.size = 1                           <span class="c"># "if" body only</span>
+cp.conditional.ctx = ctx
+node = ck(cu.cuGraphAddNode(graph, [k], <span class="k">None</span>, 1, cp))
+
+body = cp.conditional.phGraph_out[0]              <span class="c"># populate the body graph</span>
+ck(cu.cuGraphAddKernelNode(body, <span class="k">None</span>, 0, kparams(add, GRID, BLOCK, (x, 1.0, N), PTR_F32_SIZE)))
+
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+ck(cu.cuGraphLaunch(exe, s))</pre></div>
+  <div class="code" data-tabs><div class="bar"><span>WHILE node: loop until a device counter is 0</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp"><span class="k">__global__</span> void loopKernel(cudaGraphConditionalHandle handle, char* dPtr) {
+    <span class="k">if</span> (--(*dPtr) == 0) cudaGraphSetConditional(handle, 0);
+}
+
+cudaGraphConditionalHandle handle;
+cudaGraphConditionalHandleCreate(&amp;handle, graph, 1, cudaGraphCondAssignDefault);
+
+cudaGraphNodeParams c = { cudaGraphNodeTypeConditional };
+c.conditional.handle = handle;
+c.conditional.type   = cudaGraphCondTypeWhile;
+c.conditional.size   = 1;
+cudaGraphAddNode(&amp;node, graph, NULL, NULL, 0, &amp;c);
+cudaGraph_t body = c.conditional.phGraph_out[0];
+
+void* args[] = { &amp;handle, &amp;dPtr };
+cudaGraphNodeParams k = { cudaGraphNodeTypeKernel };
+k.kernel.func         = (void*)loopKernel;
+k.kernel.gridDim      = k.kernel.blockDim = dim3(1);
+k.kernel.kernelParams = args;
+cudaGraphAddNode(&amp;node, body, NULL, NULL, 0, &amp;k);
+
+cudaMemset(dPtr, 10, 1);                              <span class="c">// one byte: 10 iterations</span>
+cudaGraphInstantiate(&amp;exec, graph, 0);
+cudaGraphLaunch(exec, stream);</pre><pre data-p="py" hidden><span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphDefinition
+
+count = dev.allocate(4, stream=s)            <span class="c"># int32 loop counter on the device</span>
+
+g = GraphDefinition()
+cond = g.create_condition(default_value=1)   <span class="c"># cudaGraphCondAssignDefault, 1</span>
+loop = g.while_loop(cond)                    <span class="c"># WHILE node, size 1</span>
+body = loop.body
+body.launch(cfg, add, x, np.float32(1), n) \
+    .launch(one, loop_kernel, cond, count)   <span class="c"># --count; set 0 when count hits 0</span>
+
+exe = g.instantiate()
+count.fill(np.int32(10), stream=s)           <span class="c"># 4-byte pattern; fill(10) sets bytes</span>
+exe.launch(s)                                <span class="c"># body runs 10 times</span></pre><pre data-p="pyb" hidden>count = ck(cu.cuMemAlloc(4))                      <span class="c"># int32 loop counter on the device</span>
+graph = ck(cu.cuGraphCreate(0))
+handle = ck(cu.cuGraphConditionalHandleCreate(
+    graph, ctx, 1, cu.CU_GRAPH_COND_ASSIGN_DEFAULT))   <span class="c"># default value 1</span>
+
+cp = cu.CUgraphNodeParams()
+cp.type = cu.CUgraphNodeType.CU_GRAPH_NODE_TYPE_CONDITIONAL
+cp.conditional.handle = handle
+cp.conditional.type = cu.CUgraphConditionalNodeType.CU_GRAPH_COND_TYPE_WHILE
+cp.conditional.size = 1
+cp.conditional.ctx = ctx
+ck(cu.cuGraphAddNode(graph, <span class="k">None</span>, <span class="k">None</span>, 0, cp))
+body = cp.conditional.phGraph_out[0]
+
+a = ck(cu.cuGraphAddKernelNode(body, <span class="k">None</span>, 0, kparams(add, GRID, BLOCK, (x, 1.0, N), PTR_F32_SIZE)))
+ck(cu.cuGraphAddKernelNode(body, [a], 1, kparams(
+    loop_kernel, 1, 1, (handle, count), (<span class="k">None</span>, <span class="k">None</span>))))  <span class="c"># --count; 0 ends it</span>
+
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+ck(cu.cuMemsetD32(count, 10, 1))                  <span class="c"># 32-bit memset: count = 10</span>
+ck(cu.cuGraphLaunch(exe, s))                      <span class="c"># body runs 10 times</span></pre></div>
+  <div class="prose"><p>A body can also come from stream capture. <code>cuda.core</code> captures into the builder that <code>if_then()</code> returns. <code>cuda.bindings</code> uses <code>cuStreamBeginCaptureToGraph</code> on the body graph.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>IF body by stream capture</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="py">flag = dev.allocate(4, stream=s)
+flag.fill(np.int32(1), stream=s)
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+cond = gb.create_condition()
+launch(gb, one, set_handle, cond, flag)      <span class="c"># GraphCondition passes as the handle</span>
+then = gb.if_then(cond).begin_building()     <span class="c"># capture into the IF body</span>
+launch(then, cfg, add, x, np.float32(1), n)
+then.end_building()
+launch(gb, cfg, scale, x, np.float32(2), n)  <span class="c"># runs after the IF node</span>
+gb.end_building()
+graph = gb.complete()</pre><pre data-p="pyb" hidden>flag = ck(cu.cuMemAlloc(4))
+ck(cu.cuMemsetD32(flag, 1, 1))
+graph = ck(cu.cuGraphCreate(0))
+handle = ck(cu.cuGraphConditionalHandleCreate(graph, ctx, 0, 0))
+k = ck(cu.cuGraphAddKernelNode(graph, <span class="k">None</span>, 0, kparams(
+    set_handle, 1, 1, (handle, flag), (<span class="k">None</span>, <span class="k">None</span>))))
+
+cp = cu.CUgraphNodeParams()
+cp.type = cu.CUgraphNodeType.CU_GRAPH_NODE_TYPE_CONDITIONAL
+cp.conditional.handle = handle
+cp.conditional.type = cu.CUgraphConditionalNodeType.CU_GRAPH_COND_TYPE_IF
+cp.conditional.size = 1
+cp.conditional.ctx = ctx
+cond = ck(cu.cuGraphAddNode(graph, [k], <span class="k">None</span>, 1, cp))
+
+<span class="c"># capture stream work into the body graph, not into a new graph</span>
+ck(cu.cuStreamBeginCaptureToGraph(s, cp.conditional.phGraph_out[0], <span class="k">None</span>, <span class="k">None</span>, 0, GLOBAL))
+ck(cu.cuLaunchKernel(add, GRID, 1, 1, BLOCK, 1, 1, 0, s, ((x, 1.0, N), PTR_F32_SIZE), 0))
+ck(cu.cuStreamEndCapture(s))
+
+ck(cu.cuGraphAddKernelNode(graph, [cond], 1,      <span class="c"># runs after the IF node</span>
+                           kparams(scale, GRID, BLOCK, (x, 2.0, N), PTR_F32_SIZE)))
+exe = ck(cu.cuGraphInstantiate(graph, 0))</pre></div>
+  <div class="note caution"><span class="tag">Caution</span><div><code>Buffer.fill()</code> with a Python <code>int</code> writes a 1-byte pattern. <code>count.fill(10)</code> makes an int32 counter 0x0A0A0A0A (168,430,090), and the WHILE loop runs for a very long time. Pass <code>np.int32(10)</code> to write a 4-byte pattern. In the driver API, <code>cuMemsetD32</code> writes 32-bit values.</div></div>
   <h3>Handle rules</h3>
   <ul class="plain">
     <li>Create the handle before the node. One handle belongs to one conditional node. You cannot destroy a handle.</li>
@@ -777,6 +1373,66 @@ cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
   </svg></div>
   <figcaption><b>Figure 6.</b> Virtual addresses stay fixed for the life of the graph, so no update is necessary. CUDA can change the physical backing at instantiation, launch, or execution.</figcaption>
   </figure>
+  <h3>Example: allocate and free inside the capture</h3>
+  <div class="prose"><p>This is the guide's stream-capture example. The free must come after every node that uses the memory. In <code>cuda.core</code>, allocate from <code>GraphMemoryResource</code> on the builder, and close the buffer on the builder. In <code>cuda.bindings</code>, <code>cuMemAllocAsync</code> and <code>cuMemFreeAsync</code> on the capturing stream make the nodes. Both graphs have 6 nodes: alloc, 2 copies, 2 kernels, free.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Alloc node, fork, join, free node</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaStreamBeginCapture(stream1, cudaStreamCaptureModeGlobal);
+cudaMallocAsync(&amp;dptr, size, stream1);                <span class="c">// alloc node</span>
+kernel_A&lt;&lt;&lt;grid, block, 0, stream1&gt;&gt;&gt;(dptr, ...);
+
+cudaEventRecord(event1, stream1);                     <span class="c">// fork</span>
+cudaStreamWaitEvent(stream2, event1);
+kernel_B&lt;&lt;&lt;grid, block, 0, stream1&gt;&gt;&gt;(dptr, ...);
+kernel_C&lt;&lt;&lt;grid, block, 0, stream2&gt;&gt;&gt;(dptr, ...);     <span class="c">// depends on the alloc node</span>
+
+cudaEventRecord(event2, stream2);                     <span class="c">// join</span>
+cudaStreamWaitEvent(stream1, event2);
+
+cudaFreeAsync(dptr, stream1);                         <span class="c">// free node: after all users</span>
+cudaStreamEndCapture(stream1, &amp;graph);</pre><pre data-p="py" hidden><span class="k">from</span> cuda.core <span class="k">import</span> GraphMemoryResource
+<span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphBuilder
+
+out = dev.allocate(N * 4, stream=s)
+gmr = GraphMemoryResource(dev)
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+tmp = gmr.allocate(N * 4, stream=gb)          <span class="c"># cudaMallocAsync -&gt; alloc node</span>
+tmp.copy_from(x, stream=gb)                    <span class="c"># A: fill tmp</span>
+left, right = gb.split(2)                      <span class="c"># fork</span>
+launch(left, cfg, scale, tmp, np.float32(2), n)    <span class="c"># B uses tmp</span>
+launch(right, cfg, add, out, np.float32(1), n)     <span class="c"># C (independent)</span>
+gb = GraphBuilder.join(left, right)            <span class="c"># join</span>
+out.copy_from(tmp, stream=gb)
+tmp.close(gb)                                  <span class="c"># cudaFreeAsync -&gt; free node, after all users</span>
+gb.end_building()
+graph = gb.complete()
+graph.launch(s)
+s.sync()
+
+print(gmr.attributes.reserved_mem_current)   <span class="c"># 33554432: 32 MiB for a 4 MiB buffer</span>
+gmr.trim()                                     <span class="c"># give unused graph memory back to the OS</span></pre><pre data-p="pyb" hidden>out = ck(cu.cuMemAlloc(N * 4))
+s2 = ck(cu.cuStreamCreate(cu.CUstream_flags.CU_STREAM_NON_BLOCKING.value))
+fork = ck(cu.cuEventCreate(cu.CUevent_flags.CU_EVENT_DISABLE_TIMING.value))
+join = ck(cu.cuEventCreate(cu.CUevent_flags.CU_EVENT_DISABLE_TIMING.value))
+
+ck(cu.cuStreamBeginCapture(s, GLOBAL))
+tmp = ck(cu.cuMemAllocAsync(N * 4, s))                         <span class="c"># alloc node</span>
+ck(cu.cuMemcpyDtoDAsync(tmp, x, N * 4, s))                     <span class="c"># A: fill tmp</span>
+ck(cu.cuEventRecord(fork, s)); ck(cu.cuStreamWaitEvent(s2, fork, 0))
+ck(cu.cuLaunchKernel(scale, GRID, 1, 1, BLOCK, 1, 1, 0, s,     <span class="c"># B uses tmp</span>
+                     ((tmp, 2.0, N), PTR_F32_SIZE), 0))
+ck(cu.cuLaunchKernel(add, GRID, 1, 1, BLOCK, 1, 1, 0, s2,      <span class="c"># C (independent)</span>
+                     ((out, 1.0, N), PTR_F32_SIZE), 0))
+ck(cu.cuEventRecord(join, s2)); ck(cu.cuStreamWaitEvent(s, join, 0))
+ck(cu.cuMemcpyDtoDAsync(out, tmp, N * 4, s))
+ck(cu.cuMemFreeAsync(tmp, s))                                  <span class="c"># free node, after all users</span>
+graph = ck(cu.cuStreamEndCapture(s))
+exe = ck(cu.cuGraphInstantiate(graph, 0))
+ck(cu.cuGraphLaunch(exe, s))
+ck(cu.cuStreamSynchronize(s))
+
+RESERVED = cu.CUgraphMem_attribute.CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT
+print(int(ck(cu.cuDeviceGetGraphMemAttribute(dev, RESERVED))))  <span class="c"># 33554432 on RTX 4090</span>
+ck(cu.cuDeviceGraphMemTrim(dev))               <span class="c"># give unused graph memory back to the OS</span></pre></div>
+  <div class="note info"><span class="tag">Note</span><div><code>dev.allocate()</code> during a capture raises <code>RuntimeError</code>: the default memory resource cannot allocate on a capturing stream. Use <code>GraphMemoryResource</code>. Graph memory is reserved in large chunks: a 4 MiB buffer reserved 32 MiB on the RTX 4090.</div></div>
   <h3>Restrictions on graphs with memory nodes</h3>
   <ul class="plain">
     <li>You cannot delete nodes or edges. You cannot clone the graph.</li>
@@ -842,6 +1498,99 @@ cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
     <li>Device launch is per thread. Select one thread to launch.</li>
     <li>After a host update, upload the exec again. A device launch during an update is undefined behavior.</li>
   </ul>
+  <h3>Example: fire-and-forget launch</h3>
+  <div class="prose"><p>The device graph must be instantiated for device launch and uploaded. A kernel in a host-launched graph launches it. The launcher calls the device runtime, so compile it as relocatable device code and link <code>libcudadevrt</code>.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Launch a graph from a kernel</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp"><span class="k">__global__</span> void launchFireAndForgetGraph(cudaGraphExec_t graph) {
+    cudaGraphLaunch(graph, cudaStreamGraphFireAndForget);
+}
+
+<span class="c">// 1. The device graph: instantiate for device launch, then upload.</span>
+create_graph(&amp;g2);
+cudaGraphInstantiate(&amp;gExec2, g2, cudaGraphInstantiateFlagDeviceLaunch);
+cudaGraphUpload(gExec2, stream);
+
+<span class="c">// 2. The host graph: one kernel that launches the device graph.</span>
+cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+launchFireAndForgetGraph&lt;&lt;&lt;1, 1, 0, stream&gt;&gt;&gt;(gExec2);
+cudaStreamEndCapture(stream, &amp;g1);
+cudaGraphInstantiate(&amp;gExec1, g1, 0);
+
+cudaGraphLaunch(gExec1, stream);  <span class="c">// host graph runs, then launches gExec2</span>
+<span class="c">// build with: nvcc -rdc=true ... -lcudadevrt</span></pre><pre data-p="py" hidden><span class="k">from</span> cuda.core <span class="k">import</span> Linker, LinkerOptions, ObjectCode
+<span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphCompleteOptions
+<span class="k">from</span> cuda.pathfinder <span class="k">import</span> find_static_lib
+
+DSRC = <span class="s">r"""
+#include &lt;cuda_device_runtime_api.h&gt;
+extern "C" __global__ void launch_fire_and_forget(cudaGraphExec_t g) {
+  cudaGraphLaunch(g, cudaStreamGraphFireAndForget);
+}
+"""</span>
+rdc = ProgramOptions(arch=<span class="s">f"sm_{dev.arch}"</span>, relocatable_device_code=<span class="k">True</span>,
+                     include_path=[find_nvidia_header_directory(<span class="s">"cudart"</span>)])
+obj = Program(DSRC, <span class="s">"c++"</span>, rdc).compile(<span class="s">"cubin"</span>)
+devrt = ObjectCode.from_library(find_static_lib(<span class="s">"cudadevrt"</span>))  <span class="c"># device-side runtime</span>
+dmod = Linker(obj, devrt, options=LinkerOptions(arch=<span class="s">f"sm_{dev.arch}"</span>)).link(<span class="s">"cubin"</span>)
+launcher = dmod.get_kernel(<span class="s">"launch_fire_and_forget"</span>)
+
+<span class="c"># 1. The device graph: instantiate for device launch, then upload.</span>
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+launch(gb, cfg, add, x, np.float32(1), n)
+gb.end_building()
+dgraph = gb.complete(GraphCompleteOptions(device_launch=<span class="k">True</span>, upload_stream=s))
+
+<span class="c"># 2. The host graph: one kernel that launches the device graph.</span>
+hb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+launch(hb, one, launcher, np.uintp(int(dgraph.handle)))      <span class="c"># cudaGraphExec_t</span>
+hb.end_building()
+hgraph = hb.complete()
+hgraph.launch(s)               <span class="c"># host graph runs, then launches the device graph</span></pre><pre data-p="pyb" hidden><span class="k">from</span> cuda.bindings <span class="k">import</span> nvjitlink
+<span class="k">from</span> cuda.pathfinder <span class="k">import</span> find_static_lib
+
+DSRC = <span class="s">rb"""
+#include &lt;cuda_device_runtime_api.h&gt;
+extern "C" __global__ void launch_fire_and_forget(cudaGraphExec_t g) {
+  cudaGraphLaunch(g, cudaStreamGraphFireAndForget);
+}
+"""</span>
+p = ck(nvrtc.nvrtcCreateProgram(DSRC, <span class="s">b"launcher.cu"</span>, 0, [], []))
+o = [<span class="s">f"--gpu-architecture={ARCH}"</span>.encode(), <span class="s">b"--relocatable-device-code=true"</span>,
+     <span class="s">b"-I"</span> + find_nvidia_header_directory(<span class="s">"cudart"</span>).encode()]
+ck(nvrtc.nvrtcCompileProgram(p, len(o), o))
+obj = bytearray(ck(nvrtc.nvrtcGetCUBINSize(p)))
+ck(nvrtc.nvrtcGetCUBIN(p, obj))
+
+<span class="c"># Link with nvJitLink, not cuLink*: the driver linker is as old as the driver</span>
+<span class="c"># (13.2 here) and rejects objects from NVRTC 13.5 (CUDA_ERROR_NO_BINARY_FOR_GPU).</span>
+h = nvjitlink.create(1, [<span class="s">f"-arch={ARCH}"</span>])
+nvjitlink.add_data(h, nvjitlink.InputType.CUBIN, bytes(obj), len(obj), <span class="s">"launcher"</span>)
+nvjitlink.add_file(h, nvjitlink.InputType.LIBRARY, find_static_lib(<span class="s">"cudadevrt"</span>))  <span class="c"># device runtime</span>
+nvjitlink.complete(h)
+image = bytearray(nvjitlink.get_linked_cubin_size(h))
+nvjitlink.get_linked_cubin(h, image)
+nvjitlink.destroy(h)
+dmod = ck(cu.cuModuleLoadData(bytes(image)))
+launcher = ck(cu.cuModuleGetFunction(dmod, <span class="s">b"launch_fire_and_forget"</span>))
+
+<span class="c"># 1. The device graph: instantiate for device launch, then upload.</span>
+ck(cu.cuStreamBeginCapture(s, GLOBAL))
+ck(cu.cuLaunchKernel(add, GRID, 1, 1, BLOCK, 1, 1, 0, s, ((x, 1.0, N), PTR_F32_SIZE), 0))
+dgraph = ck(cu.cuStreamEndCapture(s))
+dexe = ck(cu.cuGraphInstantiate(
+    dgraph, cu.CUgraphInstantiate_flags.CUDA_GRAPH_INSTANTIATE_FLAG_DEVICE_LAUNCH))
+ck(cu.cuGraphUpload(dexe, s))
+
+<span class="c"># 2. The host graph: one kernel that launches the device graph.</span>
+ck(cu.cuStreamBeginCapture(s, GLOBAL))
+ck(cu.cuLaunchKernel(launcher, 1, 1, 1, 1, 1, 1, 0, s, ((dexe,), (<span class="k">None</span>,)), 0))
+hgraph = ck(cu.cuStreamEndCapture(s))
+hexe = ck(cu.cuGraphInstantiate(hgraph, 0))
+ck(cu.cuGraphLaunch(hexe, s))       <span class="c"># host graph runs, then launches the device graph</span></pre></div>
+  <div class="notes">
+  <div class="note caution"><span class="tag">Caution</span><div>Link with nvJitLink, not with the driver linker. <code>cuLink*</code> is as old as the driver. On a 13.2 driver, <code>cuLinkAddData</code> rejects a relocatable cubin from NVRTC 13.5 with <code>CUDA_ERROR_NO_BINARY_FOR_GPU</code>. nvJitLink comes with the toolkit, so it matches NVRTC. <code>cuda.core</code>'s <code>Linker</code> uses nvJitLink when it is installed.</div></div>
+  <div class="note caution"><span class="tag">Caution</span><div>In <code>cuda.core</code> 1.2.2, pass the object codes first and the options by keyword: <code>Linker(obj, devrt, options=...)</code>. The docstring shows the options first, which raises <code>TypeError</code>.</div></div>
+  </div>
+
 </section>
 
 <!-- 12 -->
@@ -849,16 +1598,56 @@ cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
   <div class="eyebrow"><b>12</b> · Lifetime</div>
   <h2>CUDA user objects</h2>
   <div class="prose"><p>A graph can use a resource after the code that captured it returns. A user object attaches a destructor to a reference count, like <code>shared_ptr</code>. Graphs can own references.</p></div>
-  <div class="code"><div class="bar"><span>Give the only reference to the graph</span><span>C++</span></div><pre>cudaUserObject_t obj;
+  <div class="code" data-tabs><div class="bar"><span>Give the only reference to the graph</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="cpp" aria-selected="false">C++</button><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="cpp">cudaUserObject_t obj;
 cudaUserObjectCreate(&amp;obj, res, destroyRes, 1, cudaUserObjectNoDestructorSync);
 cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
 <span class="c">// clone: copies references. instantiate: exec retains a copy.</span>
-<span class="c">// exec destroyed while running: CUDA keeps references until work completes.</span></pre></div>
+<span class="c">// exec destroyed while running: CUDA keeps references until work completes.</span></pre><pre data-p="py" hidden><span class="k">import</span> weakref
+<span class="k">from</span> cuda.bindings <span class="k">import</span> driver <span class="k">as</span> cu
+<span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphDefinition
+
+class RawBuffer:                             <span class="c"># memory that cuda.core does not own</span>
+    <span class="k">def</span> __init__(self, nbytes):
+        self.ptr = int(cu.cuMemAlloc(nbytes)[1])
+    <span class="k">def</span> __del__(self):
+        cu.cuMemFree(self.ptr)
+
+raw = RawBuffer(N * 4)
+alive = weakref.ref(raw)
+g = GraphDefinition()
+g.memset(raw.ptr, np.uint32(0), N, dst_owner=raw)   <span class="c"># the graph retains 'raw'</span>
+exe = g.instantiate()                        <span class="c"># the exec retains it too</span>
+
+<span class="k">del</span> raw, g                                   <span class="c"># our references are gone ...</span>
+exe.launch(s)
+print(alive() <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>)                   <span class="c"># ... True: the exec keeps it alive</span>
+exe.close()                                  <span class="c"># last reference: CUDA releases it later</span></pre><pre data-p="pyb" hidden>graph = ck(cu.cuGraphCreate(0))
+ck(cu.cuGraphAddKernelNode(graph, <span class="k">None</span>, 0, kparams(add, GRID, BLOCK, (x, 1.0, N), PTR_F32_SIZE)))
+released = []
+
+res = {<span class="s">"name"</span>: <span class="s">"scratch arena"</span>}                 <span class="c"># the resource to keep alive</span>
+@ctypes.CFUNCTYPE(<span class="k">None</span>, ctypes.c_void_p)
+<span class="k">def</span> destroy(_):                                 <span class="c"># runs on a CUDA internal thread</span>
+    released.append(res.pop(<span class="s">"name"</span>))            <span class="c"># no CUDA calls in here</span>
+
+obj = ck(cu.cuUserObjectCreate(0, cu.CUhostFn(ctypes.cast(destroy, ctypes.c_void_p).value),
+                               1, cu.CUuserObject_flags.CU_USER_OBJECT_NO_DESTRUCTOR_SYNC))
+ck(cu.cuGraphRetainUserObject(graph, obj, 1,     <span class="c"># move our only reference</span>
+                              cu.CUuserObjectRetain_flags.CU_GRAPH_USER_OBJECT_MOVE))
+exe = ck(cu.cuGraphInstantiate(graph, 0))       <span class="c"># the exec retains its own reference</span>
+ck(cu.cuGraphDestroy(graph))                    <span class="c"># graph gone; exec still holds one</span>
+ck(cu.cuGraphLaunch(exe, s))
+ck(cu.cuGraphExecDestroy(exe))                  <span class="c"># last reference: destroy() runs later</span></pre></div>
   <ul class="plain">
     <li>References in a child graph belong to the child, not the parent.</li>
     <li>The destructor must not call CUDA APIs. It runs on a CUDA internal thread, like a host function.</li>
     <li>No API waits for a destructor. Signal your own sync object from the destructor if you need to wait.</li>
   </ul>
+  <div class="notes">
+  <div class="note info"><span class="tag">Note</span><div><code>cuda.core</code> has no user-object API. Its explicit nodes take an owner instead: <code>dst_owner</code> and <code>src_owner</code> keep a Python object alive for the life of the graph and of each executable graph. The <code>cuda.bindings</code> tab uses the user-object API directly, with a ctypes destructor.</div></div>
+  <div class="note caution"><span class="tag">Caution</span><div><code>GraphBuilder</code> does not keep captured <code>Buffer</code> objects alive. If Python frees a buffer that the graph uses, a later replay can use memory that another allocation owns. Keep a reference to each captured buffer for the life of the graph. <code>GraphDefinition</code> nodes retain their <code>Buffer</code> operands; captured operations do not.</div></div>
+  </div>
+
 </section>
 
 <!-- 13 -->
@@ -888,6 +1677,7 @@ cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
     <button class="chip" data-f="perf" aria-pressed="false">Slow</button>
     <button class="chip" data-f="mem" aria-pressed="false">Memory</button>
     <button class="chip" data-f="crash" aria-pressed="false">Crash, hang</button>
+    <button class="chip" data-f="py" aria-pressed="false">Python</button>
   </div>
   <div class="tbl"><table id="gt">
     <thead><tr><th>Symptom</th><th>Cause</th><th>Corrective action</th><th>Src</th></tr></thead>
@@ -914,6 +1704,16 @@ cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
       <tr data-k="mem"><td>GPU memory stays high after you destroy graphs.</td><td>The graph memory pool keeps physical pages. <code>cudaMemPoolTrimTo</code> does not touch it.</td><td>Call <code>cudaDeviceGraphMemTrim</code>. Monitor <code>cudaGraphMemAttrReservedMemCurrent</code>.</td><td>[G]</td></tr>
       <tr data-k="perf"><td>Kernel times in Nsight Systems differ from real runs.</td><td><code>--cuda-graph-trace=node</code> traces each node and adds overhead. The default traces the whole graph.</td><td>Use graph-level trace for timing. Use node-level trace only to see the content.</td><td>[D]</td></tr>
       <tr data-k="capture"><td>Capture fails when a kernel is first used inside it.</td><td>With lazy loading (default), a module loads on first use. A JIT or module load during capture can fail.</td><td>Warm up all kernels before capture. To test this cause, set <code>CUDA_MODULE_LOADING=EAGER</code>.</td><td>[Z] [G3]</td></tr>
+      <tr data-k="correct py"><td>A kernel gets <code>0.0</code> for a float argument. No error.</td><td><code>cuda.core</code> packs a Python <code>float</code> as an 8-byte double. A <code>float</code> parameter reads only 4 bytes.</td><td>Pass <code>np.float32</code> for <code>float</code> and <code>np.uint64</code> for <code>size_t</code>.</td><td>[CP], tested</td></tr>
+      <tr data-k="correct"><td>The first replay after a host-to-device copy reads partly old data.</td><td><code>cuMemcpyHtoD</code> from pageable memory can return before the DMA completes. It runs on the legacy stream. A non-blocking stream does not wait for the legacy stream.</td><td>Copy with <code>cuMemcpyHtoDAsync</code> on the launch stream, or synchronize before the launch. Use pinned memory for inputs.</td><td>[S], tested</td></tr>
+      <tr data-k="mem py"><td>A replay reads or writes memory that another allocation owns.</td><td><code>GraphBuilder</code> does not keep captured <code>Buffer</code> objects alive. Python freed one that the graph uses.</td><td>Keep a reference to each captured buffer for the life of the graph. Or build the graph with <code>GraphDefinition</code>, which retains its operands.</td><td>[CP]</td></tr>
+      <tr data-k="capture py"><td>An unsafe call during capture is not detected.</td><td><code>begin_building()</code> uses relaxed mode by default.</td><td>Pass <code>"global"</code> to <code>begin_building()</code> while you develop.</td><td>[CP]</td></tr>
+      <tr data-k="capture py"><td><code>begin_building()</code> fails with <code>CUDA_ERROR_ILLEGAL_STATE</code> after an earlier capture error.</td><td>In <code>cuda.core</code> 1.2.2, <code>end_building()</code> raises on an invalidated capture but does not end it. <code>close()</code> raises and does not close the builder.</td><td>Drop the failed builder (<code>del gb</code>) before the next capture on that stream. See <a href="#invalid">06</a>.</td><td>tested</td></tr>
+      <tr data-k="capture py"><td>A new capture fails with "Graph builder is not building", or its graph gives <code>CUDA_ERROR_INVALID_VALUE</code>.</td><td>Python freed a failed builder while, or after, a new capture used the same stream. Its finalizer ended that capture.</td><td>Drop the failed builder before you begin the new capture.</td><td>tested</td></tr>
+      <tr data-k="crash py"><td>A WHILE loop does not end, or runs for a very long time.</td><td><code>Buffer.fill(10)</code> writes the byte 10 to each byte. An int32 counter starts at 168,430,090.</td><td>Pass <code>np.int32(10)</code> to write a 4-byte pattern.</td><td>tested</td></tr>
+      <tr data-k="crash py"><td>Module load fails with <code>CUDA_ERROR_UNSUPPORTED_PTX_VERSION</code>.</td><td>NVRTC is newer than the driver. NVRTC 13.5 makes PTX 9.5; a 13.2 driver cannot JIT it.</td><td>Compile to <code>cubin</code> for the device (<code>sm_XX</code>). Or update the driver.</td><td>tested</td></tr>
+      <tr data-k="crash py"><td><code>cuLinkAddData</code> fails with <code>CUDA_ERROR_NO_BINARY_FOR_GPU</code>.</td><td>The driver linker is as old as the driver. It cannot link relocatable code from a newer NVRTC.</td><td>Link with nvJitLink (<code>cuda.bindings.nvjitlink</code>, or <code>cuda.core.Linker</code>).</td><td>tested</td></tr>
+      <tr data-k="py"><td>NVRTC: <code>identifier "cudaGraphSetConditional" is undefined</code>.</td><td>The device graph API is declared in <code>cuda_device_runtime_api.h</code>. NVRTC does not include it.</td><td>Include the header. Add the <code>cudart</code> include directory from <code>cuda.pathfinder</code>. Install the <code>crt</code> headers too.</td><td>tested</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -946,6 +1746,35 @@ cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
     <li><div>If the capture fails only with other threads active, capture again in ThreadLocal mode.</div></li>
     <li><div>After EndCapture, dump the graph with <code>cudaGraphDebugDotPrint</code>. Make sure that the node count is correct.</div></li>
   </ol>
+  <h3>Dump and count nodes from Python</h3>
+  <div class="prose"><p>Step 7 of the procedure. Count the nodes by type after the capture ends. A missing node means that work ran outside the capture. In <code>cuda.core</code>, the <code>graph_definition</code> view is available only after <code>end_building()</code>. In <code>cuda.bindings</code>, call <code>cuGraphGetNodes</code> two times: first for the count, then for the nodes.</p></div>
+  <div class="code" data-tabs><div class="bar"><span>Count nodes, write DOT</span><span class="tabs" role="tablist" aria-label="Language"><button class="tab" type="button" role="tab" data-t="py" aria-selected="false">cuda.core</button><button class="tab" type="button" role="tab" data-t="pyb" aria-selected="false">cuda.bindings</button><button class="copy" type="button">Copy</button></span></div><pre data-p="py"><span class="k">from</span> collections <span class="k">import</span> Counter
+<span class="k">from</span> cuda.core.graph <span class="k">import</span> GraphDebugPrintOptions
+
+gb = s.create_graph_builder().begin_building(<span class="s">"global"</span>)
+step(gb)
+gb.end_building()
+
+expected = 2                                  <span class="c"># kernels that step() launches</span>
+kinds = Counter(type(v).__name__ <span class="k">for</span> v <span class="k">in</span> gb.graph_definition.nodes())
+print(kinds)                                  <span class="c"># Counter({'KernelNode': 2})</span>
+<span class="k">assert</span> sum(kinds.values()) == expected        <span class="c"># a missing node = work outside capture</span>
+gb.debug_dot_print(<span class="s">"step.dot"</span>, GraphDebugPrintOptions(verbose=<span class="k">True</span>))
+<span class="c"># then: dot -Tsvg step.dot -o step.svg</span></pre><pre data-p="pyb" hidden><span class="k">from</span> collections <span class="k">import</span> Counter
+
+ck(cu.cuStreamBeginCapture(s, GLOBAL))
+step(s)
+graph = ck(cu.cuStreamEndCapture(s))
+
+_, count = ck(cu.cuGraphGetNodes(graph, 0))           <span class="c"># first call: the count</span>
+nodes, count = ck(cu.cuGraphGetNodes(graph, count))   <span class="c"># second call: the nodes</span>
+kinds = Counter(ck(cu.cuGraphNodeGetType(v)).name <span class="k">for</span> v <span class="k">in</span> nodes)
+print(kinds)                                  <span class="c"># Counter({'CU_GRAPH_NODE_TYPE_KERNEL': 2})</span>
+expected = 2                                  <span class="c"># kernels that step() launches</span>
+<span class="k">assert</span> count == expected                      <span class="c"># a missing node = work outside capture</span>
+ck(cu.cuGraphDebugDotPrint(graph, <span class="s">b"step.dot"</span>,
+                           cu.CUgraphDebugDot_flags.CU_GRAPH_DEBUG_DOT_FLAGS_VERBOSE))</pre></div>
+
 </section>
 
 <!-- 16 -->
@@ -953,6 +1782,9 @@ cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
   <div class="eyebrow"><b>16</b> · References</div>
   <h2>Sources</h2>
   <ul class="plain refs">
+    <li><b>[CP]</b> <a href="https://nvidia.github.io/cuda-python/cuda-core/latest/api.html">cuda.core API reference</a>: <a href="https://nvidia.github.io/cuda-python/cuda-core/latest/generated/cuda.core.graph.GraphBuilder.html">GraphBuilder</a>, <a href="https://nvidia.github.io/cuda-python/cuda-core/latest/generated/cuda.core.graph.GraphDefinition.html">GraphDefinition</a>, <a href="https://nvidia.github.io/cuda-python/cuda-core/latest/generated/cuda.core.Buffer.html">Buffer</a>; <a href="https://nvidia.github.io/cuda-python/cuda-core/latest/release/1.2.0-notes.html">1.2.0 release notes</a>; <a href="https://nvidia.github.io/cuda-python/cuda-bindings/latest/">cuda.bindings</a>: <a href="https://nvidia.github.io/cuda-python/cuda-bindings/latest/module/driver.html">driver</a>, <a href="https://nvidia.github.io/cuda-python/cuda-bindings/latest/module/nvjitlink.html">nvjitlink</a></li>
+    <li><b>[S]</b> <a href="https://docs.nvidia.com/cuda/cuda-driver-api/api-sync-behavior.html">CUDA Driver API: API synchronization behavior</a> (pageable memcpy)</li>
+    <li><b>tested</b> Observed when the snippets on this page ran: RTX 4090, driver 595.99, cuda.core 1.2.2, cuda-bindings 13.5.0</li>
     <li><b>[G]</b> <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html">CUDA Programming Guide v13.5, §4.2 CUDA Graphs</a></li>
     <li><b>[G2]</b> <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/programmatic-dependent-launch.html">CUDA Programming Guide v13.5, §4.5.3 PDL in CUDA Graphs</a></li>
     <li><b>[G3]</b> <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/lazy-loading.html">CUDA Programming Guide v13.5, §4.9 Lazy Loading</a></li>
@@ -1072,8 +1904,43 @@ cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
     b.onclick=function(){
       var f=b.dataset.f;
       Array.prototype.forEach.call(document.querySelectorAll('#gf .chip'),function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
-      Array.prototype.forEach.call(document.querySelectorAll('#gt tbody tr'),function(r){r.hidden=!(f==='all'||r.dataset.k===f);});
+      Array.prototype.forEach.call(document.querySelectorAll('#gt tbody tr'),function(r){r.hidden=!(f==='all'||(r.dataset.k||'').split(' ').indexOf(f)>=0);});
     };
+  });
+})();
+
+/* code tabs: one language choice for the whole page */
+(function(){
+  var KEY='cgdd:lang', blocks=document.querySelectorAll('.code[data-tabs]'), pref=null;
+  try{pref=localStorage.getItem(KEY);}catch(e){}
+  function pick(block,key){
+    var panes=block.querySelectorAll('pre[data-p]'), p=null, i;
+    for(i=0;i<panes.length;i++) if(panes[i].dataset.p===key) p=panes[i];
+    if(!p && key!=='cpp') for(i=0;i<panes.length;i++) if(panes[i].dataset.p!=='cpp'){p=panes[i];break;}
+    if(!p) p=panes[0];
+    for(i=0;i<panes.length;i++) panes[i].hidden=(panes[i]!==p);
+    Array.prototype.forEach.call(block.querySelectorAll('.tab'),function(b){b.setAttribute('aria-selected',b.dataset.t===p.dataset.p?'true':'false');});
+  }
+  function all(key){Array.prototype.forEach.call(blocks,function(b){pick(b,key);});}
+  all(pref||'py');
+  document.addEventListener('click',function(e){
+    var t=e.target.closest&&e.target.closest('.code .tab');
+    if(t){
+      var top=t.getBoundingClientRect().top;
+      all(t.dataset.t);
+      try{localStorage.setItem(KEY,t.dataset.t);}catch(err){}
+      window.scrollBy(0,t.getBoundingClientRect().top-top);   /* keep the clicked block in place */
+      return;
+    }
+    var c=e.target.closest&&e.target.closest('.code .copy');
+    if(c){
+      var pres=c.closest('.code').querySelectorAll('pre'), pre=null;
+      for(var i=0;i<pres.length;i++) if(!pres[i].hidden){pre=pres[i];break;}
+      if(!pre||!navigator.clipboard) return;
+      navigator.clipboard.writeText(pre.textContent).then(function(){
+        c.textContent='Copied'; setTimeout(function(){c.textContent='Copy';},1200);
+      },function(){});
+    }
   });
 })();
 </script>
