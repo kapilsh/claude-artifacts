@@ -2,7 +2,7 @@
 
 Research notes and tools — generated from explorations in AI systems, GPU programming, and distributed training.
 
-Deployed to [kapilsh.github.io/claude-artifacts](https://kapilsh.github.io/claude-artifacts/).
+Deployed to [kapilsharma.dev/claude-artifacts](https://www.kapilsharma.dev/claude-artifacts/).
 
 ## Artifacts
 
