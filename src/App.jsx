@@ -31,6 +31,13 @@ const ARTIFACTS = [
     description: 'How PyTorch captures and replays CUDA graphs: the capture lifecycle, private memory pools, graph-safe RNG, make_graphed_callables, conditional nodes, and Inductor CUDA graph trees. Written from source in Simplified Technical English.',
     tags: ['PyTorch', 'CUDA', 'CUDA Graphs', 'Inductor'],
   },
+  {
+    slug: 'cuda-graphs-deep-dive',
+    title: 'CUDA Graphs Deep Dive',
+    kind: 'Reference · CUDA',
+    description: 'CUDA graphs at the runtime level, from the CUDA 13.5 Programming Guide: object model, stream capture rules and modes, invalidation, update, conditional and memory nodes, device launch — plus gotchas collected from public debugging reports.',
+    tags: ['CUDA', 'CUDA Graphs', 'Runtime API', 'Debugging'],
+  },
 ]
 
 function store(k, v) {

@@ -1,0 +1,1080 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>CUDA Graphs Deep Dive</title>
+<meta name="description" content="How CUDA graphs work at the runtime level, from the CUDA 13.5 Programming Guide: object model, stream capture rules and modes, invalidation, update, conditional nodes, graph memory nodes, device launch, and field-reported gotchas.">
+<style>:root {
+  /* ai-systems-notes design system */
+  --bg: #f6f4ee; --paper: #fffdf8; --ink: #1d1f23; --ink2: #4a4e57; --mute: #7b808a;
+  --line: #d9d4c7; --line2: #e9e5da; --accent: #c2410c; --accent-soft: #fbe6da;
+  --cool: #0e7490; --cool-soft: #d8eef2; --ok: #3f7d20; --ok-soft: #e3f0d8;
+  --code-bg: #f0ece2; --shadow: 0 1px 0 rgba(0,0,0,.04), 0 6px 24px -12px rgba(0,0,0,.18);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --host: #9A5A06; --host-soft: #FAEEDB;
+  --dist: #0D7066; --dist-soft: #DCF0EC;
+  --warn: #A23B1A;
+  --surface: var(--paper); --sunk: var(--bg); --muted: var(--mute);
+  --line-strong: var(--line); --body: var(--sans); --display: var(--sans);
+}
+[data-theme="dark"] {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --cool-soft: #14323a; --ok: #8fcf6a; --ok-soft: #1c2a14; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --bg: #121417; --paper: #191c20; --ink: #e7e5df; --ink2: #b4b6bb; --mute: #858a93;
+  --line: #33373e; --line2: #262a30; --accent: #ff8a4c; --accent-soft: #3a2418;
+  --cool: #4cc3d9; --cool-soft: #14323a; --ok: #8fcf6a; --ok-soft: #1c2a14; --code-bg: #20242a;
+  --shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 24px -12px rgba(0,0,0,.6);
+  --host: #E7A64A; --host-soft: #2E2310; --dist: #52CDBD; --dist-soft: #0E2A27; --warn: #F08A68;
+  color-scheme: dark;
+  }
+}
+html{scroll-padding-top:56px}
+/* ── site nav ──────────────────────────────────────────────────────────── */
+.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line2);margin:0 calc(-1 * max(16px, env(safe-area-inset-left, 0px)))}
+.top .in{max-width:1240px;margin:0 auto;padding:8px 20px;display:flex;align-items:center;gap:12px;font-size:.875rem;font-family:var(--sans)}
+.top a{text-decoration:none;color:var(--mute);transition:color .15s}
+.top a:hover{color:var(--accent)}
+.top .sp{flex:1}
+.top .page-title{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top .sep-dot{color:var(--line)}
+.top .btn{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:6px;padding:5px 11px;font-size:.84rem;cursor:pointer;font-family:var(--sans);white-space:nowrap}
+.top .btn:hover{border-color:var(--accent)}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.shell { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 48px; padding-block: 40px 96px; }
+@media (min-width: 1100px) { .shell { grid-template-columns: 210px minmax(0, 1fr); } }
+
+nav.index { display: none; }
+@media (min-width: 1100px) {
+  nav.index { display: block; position: sticky; top: 72px; align-self: start; font-size: 13.5px; }
+  nav.index ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+  nav.index li { counter-increment: s; }
+  nav.index a { display: grid; grid-template-columns: 26px 1fr; padding: 5px 8px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+  nav.index a::before { content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 11.5px; padding-top: 1px; }
+  nav.index a:hover, nav.index a:focus-visible { color: var(--ink); background: var(--paper); }
+  nav.index .nav-head { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 8px; }
+}
+
+main { min-width: 0; }
+.prose { max-width: 70ch; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2.2rem, 5vw, 3.4rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.75rem; font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; margin-top: 10px; }
+p { margin: 0; }
+section { display: grid; gap: 18px; padding-top: 64px; scroll-margin-top: 56px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+.eyebrow b { color: var(--accent); font-weight: 600; }
+.lede { font-size: 1.12rem; color: var(--ink); max-width: 66ch; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+:not(pre) > code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+ul.plain, ol.plain { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; max-width: 70ch; }
+
+header.hero { display: grid; gap: 16px; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13.5px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.dev { background: var(--accent-soft); border-color: var(--accent); }
+.sw.host { background: var(--host-soft); border-color: var(--host); }
+.sw.dist { background: var(--dist-soft); border-color: var(--dist); }
+.sw.cpu { background: var(--surface); border-color: var(--line-strong); }
+
+/* figures */
+figure.fig { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 18px 14px; display: grid; gap: 12px; color: var(--ink); }
+.fig .scroll { overflow-x: auto; }
+.fig svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.fig figcaption { font-size: 13.5px; color: var(--muted); max-width: 84ch; }
+.fig figcaption b { color: var(--ink); font-weight: 600; }
+svg text { font-family: var(--mono); fill: var(--ink); font-size: 12px; white-space: pre; }
+svg .ts { font-size: 10.5px; fill: var(--muted); }
+svg .tb { font-weight: 600; font-size: 12.5px; }
+svg .ti { font-size: 11px; }
+svg .lane { font-size: 10.5px; letter-spacing: .08em; fill: var(--muted); }
+.bx { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+.bx2 { fill: var(--sunk); stroke: var(--line-strong); stroke-width: 1.2; }
+.acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.hst { fill: var(--host-soft); stroke: var(--host); stroke-width: 1.5; }
+.dst { fill: var(--dist-soft); stroke: var(--dist); stroke-width: 1.5; }
+.cl { fill: var(--cool-soft); stroke: var(--cool); stroke-width: 1.5; }
+.e { stroke: var(--ink); stroke-width: 1.3; fill: none; }
+.e.a { stroke: var(--accent); stroke-width: 1.8; }
+.e.h { stroke: var(--host); stroke-width: 1.6; }
+.e.d { stroke: var(--dist); stroke-width: 1.6; }
+.e.c { stroke: var(--cool); stroke-width: 1.6; }
+.e.dash { stroke-dasharray: 4 4; stroke: var(--mute); }
+.e.w { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 3 4; }
+.rule { stroke: var(--line); stroke-width: 1; }
+.mk { fill: var(--ink); } .mk-a { fill: var(--accent); } .mk-h { fill: var(--host); } .mk-d { fill: var(--dist); } .mk-c { fill: var(--cool); } .mk-m { fill: var(--mute); }
+.ta { fill: var(--accent) !important; } .th { fill: var(--host) !important; } .td { fill: var(--dist) !important; } .tw { fill: var(--warn) !important; } .tc { fill: var(--cool) !important; }
+
+/* tables */
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--sunk); white-space: nowrap; }
+td code { white-space: nowrap; }
+td.wrap code { white-space: normal; }
+
+/* notes */
+.notes { display: grid; gap: 10px; }
+.note { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 14.5px; max-width: 86ch; }
+.note .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding-top: 3px; color: var(--muted); }
+.note.caution { border-left: 3px solid var(--warn); }
+.note.caution .tag { color: var(--warn); }
+.note.info { border-left: 3px solid var(--accent); }
+.note.info .tag { color: var(--accent); }
+@media (max-width: 520px) { .note { grid-template-columns: 1fr; gap: 4px; } }
+
+/* code */
+.code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.code .bar { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.code pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; color: var(--ink); }
+.code .c { color: var(--muted); }
+.code .k { color: var(--accent); }
+
+/* procedure steps */
+.steps { counter-reset: st; list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; max-width: 86ch; }
+.steps li { counter-increment: st; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 15px; }
+.steps li::before { content: counter(st); font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; text-align: right; }
+.steps li .src { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-left: 6px; }
+
+/* lifecycle stepper */
+.stepper { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; display: grid; gap: 14px; }
+.stepper .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip { font: 500 13px var(--mono); padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+.chip:hover { border-color: var(--ink2); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stepper .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.flags { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.flag { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; display: grid; gap: 2px; transition: background .15s, border-color .15s; }
+.flag .v { font-size: 13.5px; font-weight: 600; color: var(--mute); }
+.flag.on { background: var(--accent-soft); border-color: var(--accent); }
+.flag.on .v { color: var(--accent); }
+.flag.chg { box-shadow: 0 0 0 2px var(--accent); }
+.stepper .desc { font-size: 14.5px; max-width: 86ch; display: grid; gap: 6px; }
+.stepper .desc .api { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.stepper .ctl { display: flex; gap: 8px; }
+.stepper .ctl button { font: 500 13px var(--sans); padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+.stepper .ctl button:disabled { opacity: .45; cursor: default; }
+
+footer.foot { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px 18px; }
+
+/* deep-dive additions */
+.mk-w { fill: var(--warn); }
+.e.dashx { stroke-dasharray: 4 3; }
+input[type=range] { accent-color: var(--accent); width: min(320px, 100%); }
+.ts-note { font-size: 12.5px; color: var(--muted); }
+.out3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.out3 .o { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; }
+.out3 .o .k { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.out3 .o .v { font-family: var(--mono); font-size: 20px; font-weight: 600; }
+.out3 .o .r { font-size: 12.5px; color: var(--ink2); }
+.out3 .o.hst { background: var(--host-soft); border-color: var(--host); }
+.out3 .o.dst { background: var(--dist-soft); border-color: var(--dist); }
+.out3 .o.acc { background: var(--accent-soft); border-color: var(--accent); }
+.simout { border: 1px solid var(--line); border-left-width: 3px; border-radius: 6px; padding: 10px 14px; display: grid; gap: 4px; font-size: 14.5px; max-width: 86ch; }
+.simout b { font-family: var(--mono); font-size: 13px; }
+.simout .api { font-family: var(--mono); font-size: 12.5px; color: var(--ink2); }
+.simout.ok { border-left-color: var(--ok); } .simout.ok b { color: var(--ok); }
+.simout.bad { border-left-color: var(--warn); } .simout.bad b { color: var(--warn); }
+.simout.warn { border-left-color: var(--host); } .simout.warn b { color: var(--host); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+#gt td:last-child { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+ul.refs { gap: 8px; font-size: 14.5px; }
+ul.refs b { font-family: var(--mono); font-size: 12px; color: var(--muted); font-weight: 600; }
+</style></head><body>
+<div class="top"><div class="in">
+  <a href="../">← claude·artifacts</a>
+  <span class="sep-dot">·</span>
+  <span class="page-title">CUDA Graphs Deep Dive</span>
+  <span class="sp"></span>
+  <button class="btn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+</div></div>
+<script>(function(){
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  var root=document.documentElement,saved=store('osf:theme');
+  if(saved)root.setAttribute('data-theme',saved);
+  document.addEventListener('DOMContentLoaded',function(){
+    var btn=document.getElementById('themeBtn');
+    if(!btn)return;
+    btn.onclick=function(){
+      var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme:dark)').matches);
+      var t=dark?'light':'dark';root.setAttribute('data-theme',t);store('osf:theme',t);
+    };
+  });
+})();</script>
+
+<div class="shell">
+<nav class="index" aria-label="Sections">
+  <div class="nav-head">Contents</div>
+  <ol>
+    <li><a href="#why">Why graphs</a></li>
+    <li><a href="#model">Object model</a></li>
+    <li><a href="#nodes">Nodes and edges</a></li>
+    <li><a href="#capture">Stream capture</a></li>
+    <li><a href="#modes">Capture modes</a></li>
+    <li><a href="#invalid">Invalidation</a></li>
+    <li><a href="#exec">Instantiate, launch</a></li>
+    <li><a href="#update">Update</a></li>
+    <li><a href="#cond">Conditional nodes</a></li>
+    <li><a href="#mem">Memory nodes</a></li>
+    <li><a href="#device">Device launch</a></li>
+    <li><a href="#userobj">User objects</a></li>
+    <li><a href="#new">New in 13.5</a></li>
+    <li><a href="#gotchas">Field gotchas</a></li>
+    <li><a href="#debug">Debug toolkit</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow"><b>Reference</b> · CUDA runtime · Graphs</div>
+  <h1>CUDA Graphs Deep Dive</h1>
+  <p class="lede">This document tells how CUDA graphs work at the runtime level, without a framework. It covers the graph object model, stream capture rules, update, conditional nodes, memory nodes, and device launch. It ends with failures that engineers report in public, and the tools to find them.</p>
+  <div class="meta-row">
+    <span>Primary source: CUDA Programming Guide v13.5, §4.2</span>
+    <span>Style: ASD-STE100 (Simplified Technical English)</span>
+    <span>Companion: <a href="../cuda-graphs/">PyTorch CUDA Graphs</a></span>
+  </div>
+  <div class="legend">
+    <span><i class="sw host"></i>Host (CPU) work</span>
+    <span><i class="sw dev"></i>Device (GPU) work</span>
+    <span><i class="sw dist"></i>Graph object</span>
+    <span><i class="sw cpu"></i>Other</span>
+  </div>
+</header>
+
+<!-- 01 -->
+<section id="why">
+  <div class="eyebrow"><b>01</b> · Overview</div>
+  <h2>Why graphs</h2>
+  <div class="prose"><p>A stream launch has a cost for each kernel. The host driver prepares each launch, and the GPU has a gap between kernels. For short kernels, this cost can be a large part of the total time.</p></div>
+  <div class="prose"><p>A graph is a set of operations with dependencies. You define the graph one time. CUDA validates it and prepares it one time, at <em>instantiation</em>. Then one call launches all of the work. CUDA also sees the full workflow, so it can apply optimizations that piecewise stream submission does not permit.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 290" role="img" aria-label="Timeline of six stream launches compared with one graph launch">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+      <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-a"/></marker>
+      <marker id="arh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-h"/></marker>
+      <marker id="ard" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-d"/></marker>
+      <marker id="arc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-c"/></marker>
+      <marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-m"/></marker>
+      <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-w"/></marker>
+    </defs>
+    <text x="20" y="18" class="lane">STREAM LAUNCH — ONE CPU CALL PER KERNEL</text>
+    <text x="20" y="51" class="ti">CPU</text>
+    <text x="20" y="89" class="ti">GPU</text>
+    <rect x="140" y="34" width="70" height="26" rx="4" class="hst"/><text x="152" y="51" class="ti">launch</text>
+    <rect x="250" y="34" width="70" height="26" rx="4" class="hst"/><text x="262" y="51" class="ti">launch</text>
+    <rect x="360" y="34" width="70" height="26" rx="4" class="hst"/><text x="372" y="51" class="ti">launch</text>
+    <rect x="470" y="34" width="70" height="26" rx="4" class="hst"/><text x="482" y="51" class="ti">launch</text>
+    <rect x="580" y="34" width="70" height="26" rx="4" class="hst"/><text x="592" y="51" class="ti">launch</text>
+    <rect x="690" y="34" width="70" height="26" rx="4" class="hst"/><text x="702" y="51" class="ti">launch</text>
+    <rect x="190" y="72" width="50" height="26" rx="4" class="acc"/><text x="206" y="89" class="ti">K1</text>
+    <rect x="300" y="72" width="50" height="26" rx="4" class="acc"/><text x="316" y="89" class="ti">K2</text>
+    <rect x="410" y="72" width="50" height="26" rx="4" class="acc"/><text x="426" y="89" class="ti">K3</text>
+    <rect x="520" y="72" width="50" height="26" rx="4" class="acc"/><text x="536" y="89" class="ti">K4</text>
+    <rect x="630" y="72" width="50" height="26" rx="4" class="acc"/><text x="646" y="89" class="ti">K5</text>
+    <rect x="740" y="72" width="50" height="26" rx="4" class="acc"/><text x="756" y="89" class="ti">K6</text>
+    <text x="244" y="114" class="ts tw">gap</text><text x="354" y="114" class="ts tw">gap</text><text x="464" y="114" class="ts tw">gap</text>
+
+    <line x1="20" y1="132" x2="940" y2="132" class="rule"/>
+    <text x="20" y="152" class="lane">GRAPH LAUNCH — ONE CPU CALL FOR THE FULL GRAPH</text>
+    <text x="20" y="185" class="ti">CPU</text>
+    <text x="20" y="223" class="ti">GPU</text>
+    <rect x="140" y="168" width="134" height="26" rx="4" class="hst"/><text x="150" y="185" class="ti">cudaGraphLaunch</text>
+    <rect x="290" y="206" width="50" height="26" rx="4" class="acc"/><text x="306" y="223" class="ti">K1</text>
+    <rect x="346" y="206" width="50" height="26" rx="4" class="acc"/><text x="362" y="223" class="ti">K2</text>
+    <rect x="402" y="206" width="50" height="26" rx="4" class="acc"/><text x="418" y="223" class="ti">K3</text>
+    <rect x="458" y="206" width="50" height="26" rx="4" class="acc"/><text x="474" y="223" class="ti">K4</text>
+    <rect x="514" y="206" width="50" height="26" rx="4" class="acc"/><text x="530" y="223" class="ti">K5</text>
+    <rect x="570" y="206" width="50" height="26" rx="4" class="acc"/><text x="586" y="223" class="ti">K6</text>
+    <text x="640" y="185" class="ti">CPU is free for other work</text>
+    <line x1="620" y1="242" x2="790" y2="242" class="e a" marker-start="url(#ara)" marker-end="url(#ara)"/>
+    <text x="650" y="260" class="ts ta">time saved: launch cost + gaps</text>
+    <line x1="140" y1="280" x2="930" y2="280" class="e dash" marker-end="url(#arm)"/>
+    <text x="900" y="272" class="ts">time</text>
+  </svg></div>
+  <figcaption><b>Figure 1.</b> Schematic, not to scale. Each stream launch has CPU cost and a GPU-side gap. A graph launch pays most of the setup at instantiation. llama.cpp found that its gaps were mostly GPU-side, not CPU-side.</figcaption>
+  </figure>
+
+  <h3>Launch cost model</h3>
+  <div class="prose"><p>NVIDIA measured repeat-launch CPU cost on Ampere (RTX 3060) for straight-line graphs. A straight-line graph is a chain of kernel nodes. Use the calculator to compare your stream cost with the measured graph cost.</p></div>
+  <div class="stepper" id="calc">
+    <div class="row"><span class="lbl">Kernels</span><input type="range" id="cN" min="1" max="2000" value="250" aria-label="Number of kernels"><span class="mono" id="cNv">250</span></div>
+    <div class="row"><span class="lbl">Stream launch cost</span><input type="range" id="cS" min="0.5" max="10" step="0.5" value="2" aria-label="Measured CPU cost per stream launch in microseconds"><span class="mono" id="cSv">2.0 µs</span><span class="ts-note">your measurement; the default is a placeholder</span></div>
+    <div class="out3" id="cOut"></div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Measurement (NVIDIA, straight line)</th><th>CUDA 11.8</th><th>CUDA 12.6</th></tr></thead>
+    <tbody>
+      <tr><td>Repeat launch, CPU, Ampere</td><td>≈ 2 µs + 200 ns/node</td><td>≈ 2.5 µs + 1 ns/node (≥ 10 nodes)</td></tr>
+      <tr><td>Repeat launch, CPU, pre-Ampere</td><td>O(n)</td><td>Still O(n)</td></tr>
+      <tr><td>Instantiate, 1025 nodes</td><td>2143 µs</td><td>1526 µs</td></tr>
+      <tr><td>First launch, CPU, 1025 nodes</td><td>278 µs</td><td>175 µs</td></tr>
+      <tr><td>Repeat launch, device, 1025 nodes</td><td>629 µs</td><td>567 µs</td></tr>
+      <tr><td>4 parallel chains × 250 nodes, repeat launch</td><td>&gt; 60 µs</td><td>≈ 6 µs</td></tr>
+    </tbody>
+  </table></div>
+  <div class="notes">
+    <div class="note caution"><span class="tag">Caution</span><div>Instantiation costs milliseconds for large graphs. A graph gives a benefit only if you launch it many times. If you instantiate for each iteration, the graph can be slower than streams.</div></div>
+    <div class="note caution"><span class="tag">Caution</span><div>Graphs are not always faster. PyGraph (2025) found that 29 of 116 graphs in its PyTorch benchmarks made performance worse, by up to 397%. Measure first. If the GPU is the bottleneck, a graph does not help.</div></div>
+  </div>
+</section>
+
+<!-- 02 -->
+<section id="model">
+  <div class="eyebrow"><b>02</b> · Objects</div>
+  <h2>Object model: template and executable</h2>
+  <div class="prose"><p>Graph work has three stages: <b>definition</b>, <b>instantiation</b>, and <b>execution</b>. Each stage has its own object.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 300" role="img" aria-label="Graph object model from definition to launch">
+    <text x="20" y="16" class="lane">DEFINE</text>
+    <text x="290" y="16" class="lane">TEMPLATE</text>
+    <text x="570" y="16" class="lane">EXECUTABLE</text>
+    <text x="830" y="16" class="lane">EXECUTE</text>
+    <rect x="20" y="30" width="200" height="56" rx="6" class="bx"/>
+    <text x="34" y="52" class="tb">Graph API</text>
+    <text x="34" y="72" class="ti">cudaGraphAddNode(...)</text>
+    <rect x="20" y="104" width="200" height="56" rx="6" class="bx"/>
+    <text x="34" y="126" class="tb">Stream capture</text>
+    <text x="34" y="146" class="ti">Begin/EndCapture</text>
+    <rect x="290" y="56" width="200" height="74" rx="6" class="dst"/>
+    <text x="304" y="80" class="tb td">cudaGraph_t</text>
+    <text x="304" y="100" class="ti">nodes + edges</text>
+    <text x="304" y="116" class="ti">editable, not thread-safe</text>
+    <rect x="570" y="56" width="200" height="74" rx="6" class="acc"/>
+    <text x="584" y="80" class="tb ta">cudaGraphExec_t</text>
+    <text x="584" y="100" class="ti">snapshot, validated</text>
+    <text x="584" y="116" class="ti">topology fixed</text>
+    <rect x="830" y="56" width="110" height="74" rx="6" class="hst"/>
+    <text x="844" y="80" class="tb th">stream</text>
+    <text x="844" y="100" class="ti">orders the</text>
+    <text x="844" y="116" class="ti">launch only</text>
+    <line x1="220" y1="58" x2="288" y2="80" class="e" marker-end="url(#ar)"/>
+    <line x1="220" y1="132" x2="288" y2="108" class="e" marker-end="url(#ar)"/>
+    <line x1="490" y1="93" x2="568" y2="93" class="e a" marker-end="url(#ara)"/>
+    <text x="494" y="86" class="ts">instantiate</text>
+    <line x1="770" y1="93" x2="828" y2="93" class="e h" marker-end="url(#arh)"/>
+    <text x="776" y="86" class="ts">launch</text>
+
+    <rect x="290" y="186" width="180" height="56" rx="6" class="bx2"/>
+    <text x="304" y="208" class="tb">new cudaGraph_t</text>
+    <text x="304" y="228" class="ti">same topology</text>
+    <path d="M470,214 C530,214 560,170 600,132" class="e d" marker-end="url(#ard)"/>
+    <text x="478" y="252" class="ts td">cudaGraphExecUpdate</text>
+    <rect x="610" y="186" width="176" height="56" rx="6" class="bx2"/>
+    <text x="622" y="208" class="tb">per-node update</text>
+    <text x="622" y="228" class="ti">cudaGraphExec*SetParams</text>
+    <line x1="698" y1="186" x2="698" y2="132" class="e d" marker-end="url(#ard)"/>
+    <path d="M390,130 L390,184" class="e dash" marker-end="url(#arm)"/>
+    <text x="396" y="164" class="ts">cudaGraphClone</text>
+    <path d="M770,118 C800,150 830,150 860,132" class="e dash" marker-end="url(#arm)"/>
+    <text x="790" y="166" class="ts">cudaGraphUpload</text>
+    <text x="20" y="276" class="ts">A cudaGraphExec_t cannot run concurrently with itself. Each launch is ordered after the previous launch of the same exec.</text>
+    <text x="20" y="292" class="ts">To run the same work concurrently, instantiate the graph two times.</text>
+  </svg></div>
+  <figcaption><b>Figure 2.</b> Instantiation takes a snapshot of the template. Later edits to the <code>cudaGraph_t</code> do not change the exec. Update APIs change parameters of the exec in place. Topology changes require a new instantiation.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Rule</th><th>Consequence</th></tr></thead>
+    <tbody>
+      <tr><td><code>cudaGraph_t</code> objects are not thread-safe.</td><td>Do not let two threads access one template at the same time.</td></tr>
+      <tr><td>Only one instance of a <code>cudaGraphExec_t</code> runs at a time.</td><td>Two launches of one exec into two streams run one after the other. Clone and instantiate again to get parallel runs.</td></tr>
+      <tr><td>The launch stream gives order only.</td><td>The stream does not limit the parallelism inside the graph. It does not control where nodes run.</td></tr>
+      <tr><td>Updates take effect at the next launch.</td><td>A launch that is running is not affected. You can queue update, launch, update, launch on one stream.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 03 -->
+<section id="nodes">
+  <div class="eyebrow"><b>03</b> · Structure</div>
+  <h2>Nodes and edges</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Node type</th><th>Stream API that capture turns into this node</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Kernel</td><td><code>&lt;&lt;&lt;&gt;&gt;&gt;</code>, <code>cudaLaunchKernelEx</code></td><td>Arguments are copied by value at capture.</td></tr>
+      <tr><td>Memcpy</td><td><code>cudaMemcpyAsync</code>; <code>cudaMemcpyBatchAsync</code> (13.5)</td><td>Update is possible for 1D copies only.</td></tr>
+      <tr><td>Memset</td><td><code>cudaMemsetAsync</code></td><td>Update is possible for 1D memsets only.</td></tr>
+      <tr><td>Host</td><td><code>cudaLaunchHostFunc</code></td><td>The function must not call CUDA APIs. <code>cudaStreamAddCallback</code> is not supported in capture.</td></tr>
+      <tr><td>Event record / wait</td><td><code>cudaEventRecordWithFlags(…, External)</code>, <code>cudaStreamWaitEvent(…, External)</code></td><td>A plain captured record is an internal edge, not a node.</td></tr>
+      <tr><td>External semaphore signal / wait</td><td><code>cudaSignal/WaitExternalSemaphoresAsync</code></td><td>Graphics and IPC interop.</td></tr>
+      <tr><td>Memory alloc / free</td><td><code>cudaMallocAsync</code>, <code>cudaFreeAsync</code></td><td>See <a href="#mem">10</a>.</td></tr>
+      <tr><td>Conditional</td><td>— (Graph API, body by <code>cudaStreamBeginCaptureToGraph</code>)</td><td>IF, WHILE, SWITCH. See <a href="#cond">09</a>.</td></tr>
+      <tr><td>Child graph</td><td>—</td><td>A nested graph. From 12.9, ownership can move to the parent.</td></tr>
+      <tr><td>Empty</td><td>—</td><td>No work. Use it to join many edges into one point.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><p><code>cudaGraphAddNode()</code> is the polymorphic API for all node types. The <code>.type</code> field selects the type. The per-type APIs, for example <code>cudaGraphAddKernelNode()</code>, will be deprecated.</p></div>
+  <div class="code"><div class="bar"><span>Explicit construction</span><span>C++</span></div><pre>cudaGraphNodeParams p = {};                 <span class="c">// reserved fields must be zero</span>
+p.type                = cudaGraphNodeTypeKernel;
+p.kernel.func         = (void*)reduce;
+p.kernel.gridDim      = dim3(blocks);
+p.kernel.blockDim     = dim3(256);
+p.kernel.kernelParams = args;               <span class="c">// copied now, not at launch</span>
+cudaGraphAddNode(&amp;k, graph, deps, <span class="k">/*edgeData=*/</span>NULL, nDeps, &amp;p);
+p = {};                                     <span class="c">// zero again before the next node</span></pre></div>
+  <h3>Edge data</h3>
+  <div class="prose"><p>Since CUDA 12.3, an edge can carry data: an outgoing port, an incoming port, and a type. Zero data is a full dependency with memory synchronization. The only non-default type is <code>cudaGraphDependencyTypeProgrammatic</code>. It gives Programmatic Dependent Launch (PDL) between two kernel nodes.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Stream launch attribute</th><th>Captured edge</th></tr></thead>
+    <tbody>
+      <tr><td><code>ProgrammaticStreamSerialization = 1</code></td><td>type Programmatic, from port <code>cudaGraphKernelNodePortProgrammatic</code></td></tr>
+      <tr><td><code>ProgrammaticEvent</code>, <code>triggerAtBlockStart = 0</code></td><td>type Programmatic, from port <code>…PortProgrammatic</code></td></tr>
+      <tr><td><code>ProgrammaticEvent</code>, <code>triggerAtBlockStart = 1</code></td><td>type Programmatic, from port <code>…PortLaunchCompletion</code></td></tr>
+    </tbody>
+  </table></div>
+  <div class="note info"><span class="tag">Note</span><div>If you query edges and pass no edge-data array, the call fails with <code>cudaErrorLossyQuery</code> when it would discard non-zero edge data. Old code that ignores edge data can fail on graphs that use PDL.</div></div>
+</section>
+
+<!-- 04 -->
+<section id="capture">
+  <div class="eyebrow"><b>04</b> · Creation</div>
+  <h2>Stream capture</h2>
+  <div class="prose"><p><code>cudaStreamBeginCapture()</code> puts a stream in capture mode. Work sent to the stream does not run. CUDA adds it to an internal <em>capture graph</em>. <code>cudaStreamEndCapture()</code> returns the graph and ends capture mode.</p></div>
+  <ul class="plain">
+    <li>You can capture any stream except <code>cudaStreamLegacy</code> (the NULL stream). <code>cudaStreamPerThread</code> is permitted.</li>
+    <li>End the capture on the stream that started it: the <em>origin stream</em>.</li>
+    <li>If the mode is not Relaxed, call Begin and End from the same thread. Otherwise End returns <code>cudaErrorStreamCaptureWrongThread</code> (908).</li>
+    <li><code>cudaStreamBeginCaptureToGraph()</code> captures into a graph that you supply, for example the body of a conditional node.</li>
+  </ul>
+  <h3>Fork and join with events</h3>
+  <div class="prose"><p>A captured event is a set of nodes, not a point in time. If another stream waits on a captured event, that stream also enters capture mode. Both streams then add nodes to the same capture graph.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 250" role="img" aria-label="Two streams fork and join during capture and the resulting graph">
+    <text x="20" y="16" class="lane">CAPTURE SEQUENCE</text>
+    <text x="640" y="16" class="lane">RESULTING GRAPH</text>
+    <line x1="610" y1="8" x2="610" y2="240" class="rule"/>
+    <text x="20" y="66" class="ti">stream1</text>
+    <text x="20" y="66" dy="14" class="ts">(origin)</text>
+    <text x="20" y="166" class="ti">stream2</text>
+    <line x1="90" y1="62" x2="590" y2="62" class="life"/>
+    <line x1="90" y1="162" x2="590" y2="162" class="life"/>
+    <rect x="100" y="46" width="50" height="32" rx="4" class="acc"/><text x="120" y="66" class="tb">A</text>
+    <text x="160" y="40" class="ts">record e1</text>
+    <circle cx="186" cy="62" r="6" class="cl"/>
+    <rect x="230" y="46" width="50" height="32" rx="4" class="acc"/><text x="250" y="66" class="tb">B</text>
+    <circle cx="186" cy="162" r="6" class="cl"/>
+    <text x="150" y="190" class="ts">wait e1</text>
+    <line x1="186" y1="70" x2="186" y2="154" class="e c" marker-end="url(#arc)"/>
+    <rect x="230" y="146" width="50" height="32" rx="4" class="acc"/><text x="250" y="166" class="tb">C</text>
+    <circle cx="340" cy="162" r="6" class="cl"/>
+    <text x="318" y="190" class="ts">record e2</text>
+    <circle cx="340" cy="62" r="6" class="cl"/>
+    <text x="320" y="40" class="ts">wait e2</text>
+    <line x1="340" y1="154" x2="340" y2="70" class="e c" marker-end="url(#arc)"/>
+    <rect x="400" y="46" width="50" height="32" rx="4" class="acc"/><text x="420" y="66" class="tb">D</text>
+    <rect x="480" y="46" width="104" height="32" rx="4" class="dst"/><text x="490" y="66" class="ti">EndCapture</text>
+    <text x="100" y="226" class="ts">stream2 must join back to stream1 before EndCapture. If not: cudaErrorStreamCaptureUnjoined (904).</text>
+
+    <rect x="740" y="30" width="56" height="32" rx="4" class="acc"/><text x="762" y="50" class="tb">A</text>
+    <rect x="670" y="104" width="56" height="32" rx="4" class="acc"/><text x="692" y="124" class="tb">B</text>
+    <rect x="810" y="104" width="56" height="32" rx="4" class="acc"/><text x="832" y="124" class="tb">C</text>
+    <rect x="740" y="178" width="56" height="32" rx="4" class="acc"/><text x="762" y="198" class="tb">D</text>
+    <line x1="756" y1="62" x2="710" y2="102" class="e" marker-end="url(#ar)"/>
+    <line x1="780" y1="62" x2="826" y2="102" class="e" marker-end="url(#ar)"/>
+    <line x1="710" y1="136" x2="756" y2="176" class="e" marker-end="url(#ar)"/>
+    <line x1="826" y1="136" x2="780" y2="176" class="e" marker-end="url(#ar)"/>
+  </svg></div>
+  <figcaption><b>Figure 3.</b> The events do not become nodes. They become edges. B and C can run in parallel at replay, on any hardware queue.</figcaption>
+  </figure>
+  <h3>Capture introspection</h3>
+  <div class="prose"><p><code>cudaStreamGetCaptureInfo()</code> returns the status, a capture ID that is unique in the process, the capture graph, and the dependency set for the next node. Use it to get the handles of the last captured nodes. <code>cudaStreamUpdateCaptureDependencies()</code> adds to (default) or replaces that set. Data other than the status is valid only if the call succeeds and the status is Active.</p></div>
+  <div class="note caution"><span class="tag">Caution</span><div>When a stream leaves capture mode, the next non-captured item in the stream still depends on the last non-captured item before capture. Capture cuts the dependency only for the items in the capture.</div></div>
+</section>
+
+<!-- 05 -->
+<section id="modes">
+  <div class="eyebrow"><b>05</b> · Threads</div>
+  <h2>Capture modes</h2>
+  <div class="prose"><p>Some APIs are <em>potentially unsafe</em> during capture. <code>cudaMalloc</code> is the example in the reference. It can make an implicit synchronization, and capture does not record it. The capture mode controls which threads can call these APIs.</p></div>
+  <div class="prose"><p>Two modes apply. The <b>capture's mode</b> is the argument to <code>cudaStreamBeginCapture</code>. The <b>thread's interaction mode</b> is a per-thread value. It is Global by default. <code>cudaThreadExchangeStreamCaptureMode</code> changes it.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Thread's mode</th><th>This thread cannot call unsafe APIs if…</th></tr></thead>
+    <tbody>
+      <tr><td><code>Global</code> (default)</td><td>this thread has a capture that did not start as Relaxed, <b>or</b> any other thread has a capture that started as Global.</td></tr>
+      <tr><td><code>ThreadLocal</code></td><td>this thread has a capture that did not start as Relaxed. Captures in other threads are ignored.</td></tr>
+      <tr><td><code>Relaxed</code></td><td>never. But calls that necessarily conflict with capture still fail, for example <code>cudaEventQuery</code> on an event last recorded in a capture.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Simulator</h3>
+  <div class="prose"><p>Thread A captures. Thread B does not. Select the modes and an API call. The result applies the rules from the Runtime API reference.</p></div>
+  <div class="stepper" id="sim">
+    <div class="row"><span class="lbl">A: BeginCapture mode</span>
+      <button class="chip" data-g="cap" data-v="G" aria-pressed="true">Global</button>
+      <button class="chip" data-g="cap" data-v="T" aria-pressed="false">ThreadLocal</button>
+      <button class="chip" data-g="cap" data-v="R" aria-pressed="false">Relaxed</button></div>
+    <div class="row"><span class="lbl">Caller</span>
+      <button class="chip" data-g="who" data-v="A" aria-pressed="false">Thread A</button>
+      <button class="chip" data-g="who" data-v="B" aria-pressed="true">Thread B</button></div>
+    <div class="row"><span class="lbl">Caller's thread mode</span>
+      <button class="chip" data-g="tm" data-v="G" aria-pressed="true">Global</button>
+      <button class="chip" data-g="tm" data-v="T" aria-pressed="false">ThreadLocal</button>
+      <button class="chip" data-g="tm" data-v="R" aria-pressed="false">Relaxed</button></div>
+    <div class="row"><span class="lbl">Call</span>
+      <button class="chip" data-g="op" data-v="malloc" aria-pressed="true">cudaMalloc</button>
+      <button class="chip" data-g="op" data-v="kern" aria-pressed="false">kernel on own stream</button>
+      <button class="chip" data-g="op" data-v="query" aria-pressed="false">cudaEventQuery(captured event)</button>
+      <button class="chip" data-g="op" data-v="devsync" aria-pressed="false">cudaDeviceSynchronize</button>
+      <button class="chip" data-g="op" data-v="legacy" aria-pressed="false">work on legacy stream</button></div>
+    <div class="simout" id="simOut" aria-live="polite"></div>
+  </div>
+  <div class="code"><div class="bar"><span>Library pattern: allow one unsafe call during capture</span><span>C++</span></div><pre>cudaStreamCaptureMode m = cudaStreamCaptureModeRelaxed;
+cudaThreadExchangeStreamCaptureMode(&amp;m);     <span class="c">// push: m now holds the old mode</span>
+cudaMalloc(&amp;p, bytes);                       <span class="c">// runs now, at capture time; NOT a graph node</span>
+cudaThreadExchangeStreamCaptureMode(&amp;m);     <span class="c">// pop: restore the old mode</span></pre></div>
+  <div class="note caution"><span class="tag">Caution</span><div>Relaxed mode permits the call, but the call is not recorded. A <code>cudaMalloc</code> runs one time, at capture. Replay uses the same address. If the memory must be new at each launch, use <code>cudaMallocAsync</code> in the capture. That makes a memory node.</div></div>
+</section>
+
+<!-- 06 -->
+<section id="invalid">
+  <div class="eyebrow"><b>06</b> · Errors</div>
+  <h2>Prohibited operations and invalidation</h2>
+  <div class="prose"><p>Captured work is not scheduled. Thus you cannot synchronize or query a capturing stream or a captured event. You also cannot synchronize a broader handle, for example the device or the context, while any of its streams captures.</p></div>
+  <div class="prose"><p>If you try an invalid operation, CUDA <em>invalidates</em> the capture graph. Every later use of the capturing streams or captured events returns an error. <code>cudaStreamEndCapture()</code> then removes the streams from capture mode, returns an error, and returns a NULL graph.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 200" role="img" aria-label="Stream capture status state machine">
+    <rect x="40" y="62" width="200" height="62" rx="8" class="bx"/>
+    <text x="56" y="88" class="tb">Not capturing</text>
+    <text x="56" y="108" class="ts">…CaptureStatusNone</text>
+    <rect x="380" y="62" width="200" height="62" rx="8" class="dst"/>
+    <text x="396" y="88" class="tb td">Active</text>
+    <text x="396" y="108" class="ts">…CaptureStatusActive</text>
+    <rect x="720" y="62" width="200" height="62" rx="8" class="acc"/>
+    <text x="736" y="88" class="tb tw">Invalidated</text>
+    <text x="736" y="108" class="ts">…CaptureStatusInvalidated</text>
+    <line x1="240" y1="78" x2="378" y2="78" class="e" marker-end="url(#ar)"/>
+    <text x="252" y="70" class="ts">BeginCapture</text>
+    <line x1="380" y1="108" x2="242" y2="108" class="e d" marker-end="url(#ard)"/>
+    <text x="252" y="124" dy="12" class="ts td">EndCapture → graph</text>
+    <line x1="580" y1="93" x2="718" y2="93" class="e w" marker-end="url(#arw)"/>
+    <text x="590" y="85" class="ts tw">invalid op</text>
+    <path d="M820,124 L820,176 L140,176 L140,126" class="e w" marker-end="url(#arw)"/>
+    <text x="330" y="170" class="ts tw">EndCapture → error + NULL graph</text>
+    <path d="M880,62 C880,24 940,24 920,62" class="e dash" marker-end="url(#arm)"/>
+    <text x="700" y="30" class="ts">later calls → 901 Invalidated</text>
+  </svg></div>
+  <figcaption><b>Figure 4.</b> Only <code>cudaStreamEndCapture</code> leaves the Invalidated state. The first error is the cause. Later 901 errors are consequences.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Code</th><th>Name</th><th>Typical trigger</th></tr></thead>
+    <tbody>
+      <tr><td>900</td><td><code>cudaErrorStreamCaptureUnsupported</code></td><td>Sync, query, or unsafe call (<code>cudaMalloc</code>, pinned alloc) during capture. Unsupported API, for example <code>cudaStreamAttachMemAsync</code>.</td></tr>
+      <tr><td>901</td><td><code>cudaErrorStreamCaptureInvalidated</code></td><td>Any call after an earlier error in the same capture.</td></tr>
+      <tr><td>902</td><td><code>cudaErrorStreamCaptureMerge</code></td><td>A stream in capture A waits on an event from capture B.</td></tr>
+      <tr><td>903</td><td><code>cudaErrorStreamCaptureUnmatched</code></td><td>EndCapture on a stream that did not begin the capture.</td></tr>
+      <tr><td>904</td><td><code>cudaErrorStreamCaptureUnjoined</code></td><td>A forked stream did not join back to the origin stream.</td></tr>
+      <tr><td>905</td><td><code>cudaErrorStreamCaptureIsolation</code></td><td>Captured work waits on non-captured work, for example an event recorded before capture, without <code>cudaEventWaitExternal</code>.</td></tr>
+      <tr><td>906</td><td><code>cudaErrorStreamCaptureImplicit</code></td><td>Use of the legacy stream while a blocking stream captures. Synchronous APIs such as <code>cudaMemcpy</code> use the legacy stream.</td></tr>
+      <tr><td>907</td><td><code>cudaErrorCapturedEvent</code></td><td>Query or sync on an event last recorded in a capture.</td></tr>
+      <tr><td>908</td><td><code>cudaErrorStreamCaptureWrongThread</code></td><td>Non-Relaxed capture ended from a different thread.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note info"><span class="tag">Rule</span><div>CUDA prefers to return an error than to ignore a dependency between captured and non-captured work. The one exception is the mode change itself. Begin and End cut the dependency between items before and after the change.</div></div>
+</section>
+
+<!-- 07 -->
+<section id="exec">
+  <div class="eyebrow"><b>07</b> · Execution</div>
+  <h2>Instantiate, upload, launch</h2>
+  <div class="code"><div class="bar"><span>Full cycle</span><span>C++</span></div><pre>cudaStreamBeginCapture(s, cudaStreamCaptureModeGlobal);
+step(s);                                        <span class="c">// kernels, copies, library calls</span>
+cudaStreamEndCapture(s, &amp;graph);                <span class="c">// check the return code and graph != NULL</span>
+
+cudaGraphInstantiateParams ip = {};
+ip.flags        = cudaGraphInstantiateFlagUpload;
+ip.uploadStream = s;                            <span class="c">// upload now, into the launch stream</span>
+cudaGraphInstantiateWithParams(&amp;exec, graph, &amp;ip);
+<span class="k">if</span> (ip.result_out != cudaGraphInstantiateSuccess) { <span class="c">/* ip.errNode_out names the node */</span> }
+
+<span class="k">for</span> (;;) cudaGraphLaunch(exec, s);              <span class="c">// same stream each time</span></pre></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Instantiate flag</th><th>Effect</th><th>Constraint</th></tr></thead>
+    <tbody>
+      <tr><td><code>AutoFreeOnLaunch</code></td><td>Before a relaunch, frees allocations from the previous launch that are still live.</td><td>Not with <code>DeviceLaunch</code>. Does not change destroy: you must still free live allocations.</td></tr>
+      <tr><td><code>Upload</code></td><td>Uploads the graph into <code>uploadStream</code> after instantiation.</td><td><code>WithParams</code> only. Not returned by <code>cudaGraphExecGetFlags</code>.</td></tr>
+      <tr><td><code>DeviceLaunch</code></td><td>The exec can launch from host and device.</td><td>Unified addressing required. Single device. See <a href="#device">11</a>.</td></tr>
+      <tr><td><code>UseNodePriority</code></td><td>Kernel nodes use their own priority attribute, not the priority of the launch stream.</td><td>Capture copies the stream priority into each kernel node. Without the flag, CUDA ignores it.</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>If a graph has memory nodes or device-updatable kernel nodes, only one exec of it can exist at a time.</li>
+    <li>If a launch finds live allocations from the previous launch and the exec has no <code>AutoFreeOnLaunch</code>, the launch fails with <code>cudaErrorInvalidValue</code>.</li>
+    <li>The first launch uploads work descriptors to the GPU, at O(n) CPU cost. <code>cudaGraphUpload</code> moves that cost out of the critical path. Uploads of one exec are serialized.</li>
+    <li>Upload into one stream and launch into another acts like a stream change. CUDA can then remap memory.</li>
+  </ul>
+</section>
+
+<!-- 08 -->
+<section id="update">
+  <div class="eyebrow"><b>08</b> · Update</div>
+  <h2>Updating an instantiated graph</h2>
+  <div class="prose"><p>Capture records every launch configuration and argument <em>by value</em>. If a value changes, the exec is stale. Re-instantiation is expensive. An update changes parameters in place, if the topology stays the same.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Method</th><th>API</th><th>Use when</th></tr></thead>
+    <tbody>
+      <tr><td>Whole graph</td><td><code>cudaGraphExecUpdate(exec, newGraph, &amp;info)</code></td><td>Many nodes change, or a library made the graph and you do not have the node handles.</td></tr>
+      <tr><td>Individual node</td><td><code>cudaGraphExecKernelNodeSetParams</code>, <code>…MemcpyNodeSetParams</code>, <code>…MemsetNodeSetParams</code>, <code>…HostNodeSetParams</code>, <code>…ChildGraphNodeSetParams</code>, <code>…EventRecord/WaitNodeSetEvent</code>, <code>…ExternalSemaphores…</code></td><td>Few nodes change and you have their handles. No topology compare, so it is faster.</td></tr>
+      <tr><td>Enable / disable</td><td><code>cudaGraphNodeSetEnabled</code></td><td>Kernel, memset, and memcpy nodes. A disabled node acts as an empty node. Its parameters stay.</td></tr>
+      <tr><td>Device-side</td><td><code>cudaGraphKernelNodeUpdatesApply</code>, <code>…SetParam</code>, <code>…SetGridDim</code>, <code>…SetEnabled</code></td><td>A kernel in the graph changes a device-updatable node on the same device. The next host upload or launch overwrites these changes.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Update checker</h3>
+  <div class="prose"><p>Select what changed. The result tells which path works.</p></div>
+  <div class="stepper" id="upd">
+    <div class="row" id="updRow"></div>
+    <div class="simout" id="updOut" aria-live="polite"></div>
+  </div>
+  <h3>Whole graph update: node pairing</h3>
+  <div class="prose"><p><code>cudaGraphExecUpdate</code> pairs nodes of the old and new graph by the order of API calls. To get a deterministic pairing, obey these rules:</p></div>
+  <ol class="steps">
+    <li><div>For each capturing stream, make the API calls in the same order. This includes event waits and other calls that make no node.</div></li>
+    <li><div>For each node, make the calls that change its incoming edges in the same order. Keep the same order inside dependency arrays.</div></li>
+    <li><div>Make the calls that create or affect <em>sink</em> nodes in the same order: node adds that make a sink, edge removals that make a sink, <code>cudaStreamUpdateCaptureDependencies</code> that removes a sink, and <code>cudaStreamEndCapture</code>.</div></li>
+  </ol>
+  <div class="note caution"><span class="tag">Caution</span><div>If threads issue captured work in a different order on each iteration, the update fails with <code>TopologyChanged</code>, even if the final graph looks the same. On failure, destroy the exec and instantiate again.</div></div>
+  <h3>Pattern: capture plus one explicit node</h3>
+  <div class="prose"><p>NVIDIA shows a combined method for a kernel whose arguments change on each launch. Capture the static kernels. Add the dynamic kernel explicitly, inside the capture, and keep its handle.</p></div>
+  <div class="code"><div class="bar"><span>Insert an explicit node into a live capture</span><span>C++</span></div><pre>cudaStreamCaptureStatus st; cudaGraph_t g; const cudaGraphNode_t* deps; size_t n;
+cudaStreamGetCaptureInfo(s, &amp;st, NULL, &amp;g, &amp;deps, NULL, &amp;n);
+cudaGraphAddNode(&amp;dyn, g, deps, NULL, n, &amp;kernelParams);   <span class="c">// keep 'dyn'</span>
+cudaStreamUpdateCaptureDependencies(s, &amp;dyn, NULL, 1,
+                                    cudaStreamSetCaptureDependencies);
+<span class="c">// ... continue capture, end, instantiate. Before each launch:</span>
+cudaGraphExecKernelNodeSetParams(exec, dyn, &amp;newParams);</pre></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Method (A100, launch-bound workload)</th><th>Time</th><th>Speedup</th></tr></thead>
+    <tbody>
+      <tr><td>No graph</td><td>706 ms</td><td>1.00×</td></tr>
+      <tr><td>Capture again + <code>cudaGraphExecUpdate</code> each time</td><td>580 ms</td><td>1.22×</td></tr>
+      <tr><td>Capture once + explicit node + <code>SetParams</code></td><td>433 ms</td><td>1.63×</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note info"><span class="tag">Note</span><div>The third option is <em>indirection</em>. The kernel reads its changing value from device memory, and you write that memory before the launch. Then no update is necessary. llama.cpp PR #9017 used this method for its KV-cache copy kernels and measured about 1–2% gain.</div></div>
+</section>
+
+<!-- 09 -->
+<section id="cond">
+  <div class="eyebrow"><b>09</b> · Control flow</div>
+  <h2>Conditional nodes</h2>
+  <div class="prose"><p>A conditional node runs a body graph based on a value on the device. The CPU does not take part. The value is in a <code>cudaGraphConditionalHandle</code>. A kernel sets it with <code>cudaGraphSetConditional()</code>.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 262" role="img" aria-label="IF, WHILE and SWITCH conditional node structures">
+    <text x="20" y="16" class="lane">IF</text>
+    <text x="340" y="16" class="lane">WHILE</text>
+    <text x="660" y="16" class="lane">SWITCH</text>
+    <line x1="320" y1="8" x2="320" y2="250" class="rule"/>
+    <line x1="640" y1="8" x2="640" y2="250" class="rule"/>
+
+    <rect x="20" y="30" width="120" height="30" rx="4" class="acc"/><text x="30" y="50" class="ti">A: set handle</text>
+    <rect x="20" y="84" width="120" height="34" rx="4" class="dst"/><text x="30" y="106" class="tb td">IF (h)</text>
+    <rect x="160" y="70" width="140" height="30" rx="4" class="bx2"/><text x="170" y="90" class="ti">body[0]: h ≠ 0</text>
+    <rect x="160" y="108" width="140" height="30" rx="4" class="bx2"/><text x="170" y="128" class="ti">body[1]: h = 0</text>
+    <text x="160" y="152" class="ts">body[1]: optional</text>
+    <rect x="20" y="180" width="120" height="30" rx="4" class="acc"/><text x="30" y="200" class="ti">C</text>
+    <line x1="80" y1="60" x2="80" y2="82" class="e" marker-end="url(#ar)"/>
+    <line x1="80" y1="118" x2="80" y2="178" class="e" marker-end="url(#ar)"/>
+    <line x1="140" y1="96" x2="158" y2="86" class="e d" marker-end="url(#ard)"/>
+    <line x1="140" y1="106" x2="158" y2="122" class="e d dashx" marker-end="url(#ard)"/>
+    <text x="20" y="236" class="ts">Body runs once, or not at all.</text>
+
+    <rect x="340" y="84" width="120" height="34" rx="4" class="dst"/><text x="350" y="106" class="tb td">WHILE (h)</text>
+    <rect x="490" y="84" width="130" height="34" rx="4" class="bx2"/><text x="500" y="106" class="ti">body graph</text>
+    <text x="490" y="134" class="ts">a body kernel sets</text>
+    <text x="490" y="148" class="ts">h = 0 to stop</text>
+    <path d="M460,94 L488,94" class="e d" marker-end="url(#ard)"/>
+    <path d="M555,84 C555,48 400,48 400,82" class="e d" marker-end="url(#ard)"/>
+    <text x="418" y="44" class="ts td">re-test after body</text>
+    <rect x="340" y="180" width="120" height="30" rx="4" class="acc"/><text x="350" y="200" class="ti">C</text>
+    <line x1="400" y1="118" x2="400" y2="178" class="e" marker-end="url(#ar)"/>
+    <text x="340" y="236" class="ts">Default value: cudaGraphCondAssignDefault.</text>
+
+    <rect x="660" y="30" width="120" height="30" rx="4" class="acc"/><text x="670" y="50" class="ti">A: set handle</text>
+    <rect x="660" y="84" width="120" height="34" rx="4" class="dst"/><text x="670" y="106" class="tb td">SWITCH (h)</text>
+    <rect x="810" y="60" width="130" height="26" rx="4" class="bx2"/><text x="820" y="78" class="ti">body[0]: h = 0</text>
+    <rect x="810" y="92" width="130" height="26" rx="4" class="bx2"/><text x="820" y="110" class="ti">body[1]: h = 1</text>
+    <rect x="810" y="124" width="130" height="26" rx="4" class="bx2"/><text x="820" y="142" class="ti">body[n-1]</text>
+    <line x1="720" y1="60" x2="720" y2="82" class="e" marker-end="url(#ar)"/>
+    <line x1="780" y1="96" x2="808" y2="74" class="e d" marker-end="url(#ard)"/>
+    <line x1="780" y1="101" x2="808" y2="105" class="e d" marker-end="url(#ard)"/>
+    <line x1="780" y1="106" x2="808" y2="136" class="e d" marker-end="url(#ard)"/>
+    <rect x="660" y="180" width="120" height="30" rx="4" class="acc"/><text x="670" y="200" class="ti">C</text>
+    <line x1="720" y1="118" x2="720" y2="178" class="e" marker-end="url(#ar)"/>
+    <text x="660" y="236" class="ts">h ≥ n: no body runs.</text>
+  </svg></div>
+  <figcaption><b>Figure 5.</b> CUDA makes the empty body graphs when you add the node. Fill them with the Graph API or with <code>cudaStreamBeginCaptureToGraph</code>. Conditional nodes can nest.</figcaption>
+  </figure>
+  <h3>Handle rules</h3>
+  <ul class="plain">
+    <li>Create the handle before the node. One handle belongs to one conditional node. You cannot destroy a handle.</li>
+    <li>With <code>cudaGraphCondAssignDefault</code>, CUDA sets the default value at the start of each launch. Without it, the value is <b>undefined</b> at each launch. Do not expect it to persist between launches.</li>
+    <li>Whole graph update also updates the handle default and flags. Create and assign handles in the same order in both graphs.</li>
+  </ul>
+  <h3>Body graph requirements</h3>
+  <ul class="plain">
+    <li>All nodes on one device.</li>
+    <li>Only kernel, empty, memcpy, memset, child graph, and conditional nodes. No host, event, or memory nodes.</li>
+    <li>No CUDA Dynamic Parallelism. No device graph launch from body kernels.</li>
+    <li>Cooperative launches are permitted if MPS is not in use (v13.5 guide). Older NVIDIA blog text says cooperative launches are not supported. Check your version.</li>
+    <li>Memcpy and memset only on device memory or pinned device-mapped host memory. No CUDA arrays. The device that holds the graph does the copy.</li>
+  </ul>
+</section>
+
+<!-- 10 -->
+<section id="mem">
+  <div class="eyebrow"><b>10</b> · Memory</div>
+  <h2>Graph memory nodes</h2>
+  <div class="prose"><p>A graph can own allocations. Capture of <code>cudaMallocAsync</code> and <code>cudaFreeAsync</code> makes alloc and free nodes. The lifetime rules are <em>GPU ordered</em>: the lifetime starts when GPU execution reaches the alloc node. It ends at the free node, at a <code>cudaFreeAsync</code> in stream order, or at once with <code>cudaFree</code>.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 296" role="img" aria-label="Graph memory node lifetime and physical memory aliasing between graphs">
+    <text x="20" y="16" class="lane">INSIDE ONE GRAPH — VIRTUAL ADDRESS FIXED AT NODE CREATION</text>
+    <rect x="20" y="28" width="130" height="34" rx="4" class="dst"/><text x="32" y="50" class="ti">alloc A</text>
+    <rect x="190" y="28" width="130" height="34" rx="4" class="acc"/><text x="202" y="50" class="ti">kernel reads A</text>
+    <rect x="360" y="28" width="130" height="34" rx="4" class="acc"/><text x="372" y="50" class="ti">kernel writes A</text>
+    <rect x="530" y="28" width="130" height="34" rx="4" class="dst"/><text x="542" y="50" class="ti">free A</text>
+    <line x1="150" y1="45" x2="188" y2="45" class="e" marker-end="url(#ar)"/>
+    <line x1="320" y1="45" x2="358" y2="45" class="e" marker-end="url(#ar)"/>
+    <line x1="490" y1="45" x2="528" y2="45" class="e" marker-end="url(#ar)"/>
+    <rect x="700" y="28" width="240" height="34" rx="4" class="bx2"/><text x="712" y="50" class="ti">alloc B: can reuse A's VA</text>
+    <line x1="660" y1="45" x2="698" y2="45" class="e dash" marker-end="url(#arm)"/>
+    <text x="20" y="82" class="ts">Access is legal only between the alloc and the free, by graph edges or stream order. Memory-based sync inside a kernel is not sufficient.</text>
+
+    <line x1="20" y1="100" x2="940" y2="100" class="rule"/>
+    <text x="20" y="122" class="lane">ACROSS GRAPHS — PHYSICAL PAGES ARE SHARED IF RUNS CANNOT OVERLAP</text>
+    <text x="20" y="152" class="ti">stream S</text>
+    <rect x="110" y="136" width="200" height="28" rx="4" class="hst"/><text x="122" y="155" class="ti">launch G1 (VA 0x7f…a)</text>
+    <rect x="330" y="136" width="200" height="28" rx="4" class="hst"/><text x="342" y="155" class="ti">launch G2 (VA 0x7f…b)</text>
+    <rect x="110" y="176" width="420" height="22" rx="4" class="cl"/><text x="122" y="191" class="ti">same physical pages, two virtual mappings</text>
+    <line x1="210" y1="164" x2="210" y2="174" class="e c" marker-end="url(#arc)"/>
+    <line x1="430" y1="164" x2="430" y2="174" class="e c" marker-end="url(#arc)"/>
+
+    <text x="20" y="232" class="ti">stream T</text>
+    <rect x="330" y="216" width="200" height="28" rx="4" class="hst"/><text x="342" y="235" class="ti">launch G2 on new stream</text>
+    <rect x="560" y="210" width="380" height="40" rx="4" class="acc"/>
+    <text x="572" y="227" class="ti tw">G2 can overlap G1 → needs own pages</text>
+    <text x="572" y="243" class="ts">remap in execution order; OS calls; slow</text>
+    <line x1="530" y1="230" x2="558" y2="230" class="e w" marker-end="url(#arw)"/>
+    <text x="20" y="278" class="ts">Avoid remaps: launch graphs with memory nodes into the same stream each time. Upload into that same stream.</text>
+  </svg></div>
+  <figcaption><b>Figure 6.</b> Virtual addresses stay fixed for the life of the graph, so no update is necessary. CUDA can change the physical backing at instantiation, launch, or execution.</figcaption>
+  </figure>
+  <h3>Restrictions on graphs with memory nodes</h3>
+  <ul class="plain">
+    <li>You cannot delete nodes or edges. You cannot clone the graph.</li>
+    <li>Only one exec of the graph can exist at a time.</li>
+    <li>You can use the graph as a child only if you move ownership to the parent (CUDA 12.9). A moved child cannot be instantiated, destroyed, or updated alone.</li>
+    <li>You can free an allocation in the owning graph or in another graph, but not in both.</li>
+    <li>Graph destruction does not free live allocations. Free them in another graph, or with <code>cudaFreeAsync</code> or <code>cudaFree</code>.</li>
+    <li>Peer access for captured allocations is the pool's peer access at capture time. Later changes to the pool do not change the graph.</li>
+  </ul>
+  <h3>Footprint</h3>
+  <div class="prose"><p>The graph memory pool is separate from the stream-ordered allocator pools. <code>cudaMemPoolTrimTo</code> does not trim it. After you destroy graphs, CUDA keeps the physical memory. <code>cudaDeviceGraphMemTrim</code> releases memory that no unfreed allocation and no scheduled graph uses.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Attribute (<code>cudaDeviceGetGraphMemAttribute</code>)</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td><code>cudaGraphMemAttrReservedMemCurrent</code></td><td>Physical memory that the driver reserves for graph allocations in this process.</td></tr>
+      <tr><td><code>cudaGraphMemAttrUsedMemCurrent</code></td><td>Physical memory that at least one graph maps now.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 11 -->
+<section id="device">
+  <div class="eyebrow"><b>11</b> · Device</div>
+  <h2>Device graph launch</h2>
+  <div class="prose"><p>A kernel can launch a graph with <code>cudaGraphLaunch</code>, with the same signature as on the host. The graph must be instantiated with <code>cudaGraphInstantiateFlagDeviceLaunch</code> and uploaded before the first device launch. A host launch also uploads it. A device launch must come from a kernel that is in another graph.</p></div>
+  <figure class="fig"><div class="scroll">
+  <svg viewBox="0 0 960 250" role="img" aria-label="Execution environments for fire-and-forget, tail and sibling device graph launches">
+    <rect x="20" y="24" width="920" height="210" rx="8" class="bx2"/>
+    <text x="34" y="44" class="lane">STREAM ENVIRONMENT (host launch of P)</text>
+    <rect x="40" y="58" width="420" height="160" rx="8" class="dst"/>
+    <text x="54" y="78" class="lane">ENVIRONMENT OF P</text>
+    <rect x="60" y="92" width="160" height="34" rx="4" class="acc"/><text x="72" y="114" class="ti">P: kernel k</text>
+    <rect x="260" y="92" width="180" height="34" rx="4" class="bx"/><text x="272" y="114" class="ti">F (fire-and-forget)</text>
+    <line x1="220" y1="109" x2="258" y2="109" class="e" marker-end="url(#ar)"/>
+    <text x="60" y="152" class="ts">F is a child of P. P is complete</text>
+    <text x="60" y="166" class="ts">only when P and all of F are complete.</text>
+    <text x="60" y="190" class="ts">Max 120 fire-and-forget launches per run of P.</text>
+
+    <rect x="500" y="92" width="180" height="34" rx="4" class="bx"/><text x="512" y="114" class="ti">T (tail launch)</text>
+    <path d="M460,138 L500,124" class="e d" marker-end="url(#ard)"/>
+    <text x="486" y="152" class="ts td">runs when P's environment</text>
+    <text x="486" y="166" class="ts td">is complete; replaces it</text>
+    <text x="486" y="190" class="ts">Max 255 pending tail launches.</text>
+
+    <rect x="720" y="92" width="200" height="34" rx="4" class="bx"/><text x="732" y="114" class="ti">S (sibling launch)</text>
+    <path d="M200,92 C200,56 760,56 812,90" class="e dash" marker-end="url(#arm)"/>
+    <text x="520" y="54" class="ts">k launches S into P's parent environment</text>
+    <text x="720" y="152" class="ts">S does not gate T.</text>
+  </svg></div>
+  <figcaption><b>Figure 7.</b> A device graph runs in its own execution environment. Device code cannot call <code>cudaDeviceSynchronize</code>. Tail launch gives serial order instead. A graph can tail-launch itself (one pending self-launch at a time) with <code>cudaGetCurrentGraphExec()</code>.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Named stream (device only)</th><th>Mode</th></tr></thead>
+    <tbody>
+      <tr><td><code>cudaStreamGraphFireAndForget</code></td><td>Starts at once, as a child of the launching graph's environment.</td></tr>
+      <tr><td><code>cudaStreamGraphTailLaunch</code></td><td>Starts when the launching environment is complete. Tail launches run one at a time, in queue order.</td></tr>
+      <tr><td><code>cudaStreamGraphFireAndForgetAsSibling</code></td><td>Starts at once, as a child of the parent environment.</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="plain">
+    <li>Device graphs: one device; only kernel, memcpy, memset, and child graph nodes; no CUDA Dynamic Parallelism.</li>
+    <li>A second device launch of a graph that is still running returns <code>cudaErrorInvalidValue</code>. Host and device launch at the same time is undefined behavior.</li>
+    <li>Device launch is per thread. Select one thread to launch.</li>
+    <li>After a host update, upload the exec again. A device launch during an update is undefined behavior.</li>
+  </ul>
+</section>
+
+<!-- 12 -->
+<section id="userobj">
+  <div class="eyebrow"><b>12</b> · Lifetime</div>
+  <h2>CUDA user objects</h2>
+  <div class="prose"><p>A graph can use a resource after the code that captured it returns. A user object attaches a destructor to a reference count, like <code>shared_ptr</code>. Graphs can own references.</p></div>
+  <div class="code"><div class="bar"><span>Give the only reference to the graph</span><span>C++</span></div><pre>cudaUserObject_t obj;
+cudaUserObjectCreate(&amp;obj, res, destroyRes, 1, cudaUserObjectNoDestructorSync);
+cudaGraphRetainUserObject(graph, obj, 1, cudaGraphUserObjectMove);
+<span class="c">// clone: copies references. instantiate: exec retains a copy.</span>
+<span class="c">// exec destroyed while running: CUDA keeps references until work completes.</span></pre></div>
+  <ul class="plain">
+    <li>References in a child graph belong to the child, not the parent.</li>
+    <li>The destructor must not call CUDA APIs. It runs on a CUDA internal thread, like a host function.</li>
+    <li>No API waits for a destructor. Signal your own sync object from the destructor if you need to wait.</li>
+  </ul>
+</section>
+
+<!-- 13 -->
+<section id="new">
+  <div class="eyebrow"><b>13</b> · Release</div>
+  <h2>New in CUDA 13.5</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Feature</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Batched 1D copies in graphs</td><td>Stream capture now accepts <code>cudaMemcpyBatchAsync</code>. You can also add batched-copy nodes explicitly. Update can change addresses and sizes. The batch structure stays fixed.</td></tr>
+      <tr><td>cuda.core 1.2 (Python)</td><td>Edit nodes of an executable graph through <code>graph[node]</code> views, without re-instantiation: kernel parameters, memcpy, memset, child graphs, events, host callbacks.</td></tr>
+      <tr><td>CCCL 3.5: CUB reductions</td><td><code>cub::DeviceReduce</code> accepts an element count in device memory. A captured reduction can use a new count at each replay, with no update.</td></tr>
+      <tr><td>CUPTI 13.5</td><td>CUDA event activity records have <code>graphId</code>, <code>graphNodeId</code>, <code>sourceGraphId</code>, <code>sourceGraphNodeId</code>. You can map an event-record node in a trace to its graph.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 14 -->
+<section id="gotchas">
+  <div class="eyebrow"><b>14</b> · Field reports</div>
+  <h2>Gotchas from the field</h2>
+  <div class="prose"><p>These failures come from public blogs, docs, issues, forum threads, and posts. Most are silent: the graph runs, but the result or the speed is wrong. The source column links to <a href="#sources">16</a>.</p></div>
+  <div class="filters" id="gf" role="group" aria-label="Filter gotchas">
+    <button class="chip" data-f="all" aria-pressed="true">All</button>
+    <button class="chip" data-f="correct" aria-pressed="false">Wrong results</button>
+    <button class="chip" data-f="capture" aria-pressed="false">Capture fails</button>
+    <button class="chip" data-f="perf" aria-pressed="false">Slow</button>
+    <button class="chip" data-f="mem" aria-pressed="false">Memory</button>
+    <button class="chip" data-f="crash" aria-pressed="false">Crash, hang</button>
+  </div>
+  <div class="tbl"><table id="gt">
+    <thead><tr><th>Symptom</th><th>Cause</th><th>Corrective action</th><th>Src</th></tr></thead>
+    <tbody>
+      <tr data-k="correct"><td>Replay uses old values. Output does not change with new input.</td><td>Capture copied scalars and pointers into kernel arguments. New values in host variables or new buffers are not seen.</td><td>Keep inputs in fixed device buffers and copy new data into them. Or read changing scalars from device memory. Or update the node.</td><td>[F] [P] [L]</td></tr>
+      <tr data-k="correct"><td>Results use stale weights after a model update.</td><td>The graph keeps the old buffer address. The update wrote a new buffer.</td><td>Update in place, in the same buffer. Or capture again.</td><td>[P2]</td></tr>
+      <tr data-k="correct"><td>A conditional node runs the wrong branch on some launches.</td><td>The handle was created without a default. Its value is undefined at each launch.</td><td>Use <code>cudaGraphCondAssignDefault</code>, or set the value in an upstream kernel each launch.</td><td>[G]</td></tr>
+      <tr data-k="correct"><td>Silent data corruption with graph memory.</td><td>A kernel used a graph allocation after its free. Another allocation now maps the same physical pages.</td><td>Order every access before the free with edges or events. Run <code>compute-sanitizer</code>.</td><td>[G]</td></tr>
+      <tr data-k="capture"><td>900 on the first capture of a library call. Eager mode works.</td><td>The library initializes on first use: it allocates a workspace or loads modules. That is illegal in capture.</td><td>Run the work once before capture (warm-up). For cuBLAS, set a workspace with <code>cublasSetWorkspace</code>.</td><td>[B] [Z]</td></tr>
+      <tr data-k="capture"><td>cuBLAS in a child or device-launched graph fails with <code>cudaErrorInvalidValue</code> (seen from CUDA 12.1).</td><td>cuBLAS allocates its workspace with stream-ordered APIs. That fails in child graphs and device-launched graphs.</td><td>Give cuBLAS user-owned memory with <code>cublasSetWorkspace()</code> before capture.</td><td>[B] [B2]</td></tr>
+      <tr data-k="capture"><td>Capture fails at random. The failure is not in the captured code.</td><td>Another thread made an unsafe call or an event query during a Global capture, for example a decode or pin-memory thread.</td><td>Capture with ThreadLocal mode. Or stop the other threads during capture.</td><td>[D]</td></tr>
+      <tr data-k="capture"><td>905 when the capture waits on earlier work.</td><td>The capture waits on an event recorded before capture.</td><td>Sync that work before capture. Or wait with <code>cudaEventWaitExternal</code>.</td><td>[G] [D]</td></tr>
+      <tr data-k="capture"><td>906 from code that does not use stream 0.</td><td>A synchronous API (for example <code>cudaMemcpy</code>) used the legacy stream while a blocking stream captured.</td><td>Create capture streams with <code>cudaStreamNonBlocking</code>. Use async APIs on explicit streams.</td><td>[G]</td></tr>
+      <tr data-k="capture"><td>The error message does not match the real cause.</td><td>The first error invalidated the capture. Cleanup code then failed with a second error, and that error hid the first.</td><td>Log the first error in the capture region. In Python, read the full exception chain.</td><td>[T]</td></tr>
+      <tr data-k="crash"><td>Segfault after a failed capture.</td><td>The app destroyed a graph it did not own. After invalidation, the driver releases the capture graph. A conditional node owns its body graphs.</td><td>Destroy only a non-NULL graph from a successful EndCapture. Never destroy a body graph.</td><td>[C1] [C2]</td></tr>
+      <tr data-k="crash"><td>Hang with NCCL graphs, many GPUs in one process.</td><td><code>cudaGraphLaunch</code> can block. One thread that launches graphs for many communicators can deadlock.</td><td>Use one GPU per process. Capture the same NCCL ops on all ranks. See <code>NCCL_GRAPH_MIXING_SUPPORT</code>.</td><td>[N]</td></tr>
+      <tr data-k="correct"><td><code>cudaEventElapsedTime</code> fails with events recorded inside the graph.</td><td>A captured record is an internal edge, not a real event record.</td><td>Record events on the stream around <code>cudaGraphLaunch</code>. Or use <code>cudaEventRecordExternal</code> during capture.</td><td>[E] [G]</td></tr>
+      <tr data-k="perf"><td>Two streams launch the same exec, but no overlap.</td><td>An exec cannot run concurrently with itself. Launches are serialized.</td><td>Instantiate one exec for each concurrent stream.</td><td>[G]</td></tr>
+      <tr data-k="perf"><td>High-priority stream has no effect on graph kernels.</td><td>Without the flag, the graph uses the launch stream priority. Per-node priority is ignored.</td><td>Instantiate with <code>cudaGraphInstantiateFlagUseNodePriority</code>.</td><td>[R]</td></tr>
+      <tr data-k="perf"><td>Graph with memory nodes is slow after a stream change.</td><td>Concurrent graphs need distinct physical pages. CUDA remaps, with OS calls.</td><td>Launch into the same stream each time. Upload into that stream.</td><td>[G]</td></tr>
+      <tr data-k="perf"><td>The first launch is slow.</td><td>The first launch uploads descriptors and maps graph memory.</td><td>Call <code>cudaGraphUpload</code>, or use <code>cudaGraphInstantiateFlagUpload</code>, before the hot path.</td><td>[G] [K]</td></tr>
+      <tr data-k="perf"><td>Graph is slower than streams.</td><td>Instantiate or update on each iteration. Or the work is GPU-bound, and launch cost is small.</td><td>Reuse the exec. Use per-node update or indirection. Profile before you adopt graphs.</td><td>[Y] [X1] [L]</td></tr>
+      <tr data-k="mem"><td>Startup is slow and KV cache is small in an inference server.</td><td>One graph for each batch size. Each graph costs memory and capture time. Inputs pad to the next captured size.</td><td>Tune the list of captured sizes. Balance padding waste against graph memory.</td><td>[V] [X1]</td></tr>
+      <tr data-k="mem"><td>GPU memory stays high after you destroy graphs.</td><td>The graph memory pool keeps physical pages. <code>cudaMemPoolTrimTo</code> does not touch it.</td><td>Call <code>cudaDeviceGraphMemTrim</code>. Monitor <code>cudaGraphMemAttrReservedMemCurrent</code>.</td><td>[G]</td></tr>
+      <tr data-k="perf"><td>Kernel times in Nsight Systems differ from real runs.</td><td><code>--cuda-graph-trace=node</code> traces each node and adds overhead. The default traces the whole graph.</td><td>Use graph-level trace for timing. Use node-level trace only to see the content.</td><td>[D]</td></tr>
+      <tr data-k="capture"><td>Capture fails when a kernel is first used inside it.</td><td>With lazy loading (default), a module loads on first use. A JIT or module load during capture can fail.</td><td>Warm up all kernels before capture. To test this cause, set <code>CUDA_MODULE_LOADING=EAGER</code>.</td><td>[Z] [G3]</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 15 -->
+<section id="debug">
+  <div class="eyebrow"><b>15</b> · Tools</div>
+  <h2>Debug toolkit</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Tool</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>cudaGraphDebugDotPrint(graph, path, flags)</code></td><td>Write the graph as Graphviz DOT. Use <code>cudaGraphDebugDotFlagsVerbose</code> to include parameters. Compare two captures to find why an update fails.</td></tr>
+      <tr><td><code>cudaGraphGetId</code>, <code>cudaGraphExecGetId</code>, <code>cudaGraphNodeGetLocalId</code>, <code>cudaGraphNodeGetToolsId</code></td><td>Stable IDs. The exec ID matches the ID in the DOT output. Match nodes to profiler records.</td></tr>
+      <tr><td><code>cudaStreamIsCapturing</code>, <code>cudaStreamGetCaptureInfo</code></td><td>Assert the capture status in library code. Get the capture ID and the current dependency set.</td></tr>
+      <tr><td><code>cudaGraphInstantiateWithParams</code></td><td><code>result_out</code> and <code>errNode_out</code> name the node that failed instantiation.</td></tr>
+      <tr><td><code>cudaGraphExecUpdate</code> result info</td><td><code>TopologyChanged</code>, <code>NodeTypeChanged</code>, <code>UnsupportedFunctionChange</code>, <code>ParametersChanged</code>, <code>AttributesChanged</code>, <code>NotSupported</code>. The error node is from the new graph.</td></tr>
+      <tr><td><code>compute-sanitizer</code></td><td>Find use-after-free of graph allocations, which can read live data of another allocation.</td></tr>
+      <tr><td><code>nsys profile --cuda-graph-trace=graph|node</code></td><td>Count <code>cudaGraphLaunch</code> calls per iteration. More than expected means the workload is split into many graphs.</td></tr>
+      <tr><td><code>CUDA_LOG_FILE</code></td><td>Write driver error log messages to a file. These often give the reason for a capture error.</td></tr>
+      <tr><td>CUPTI 13.5 event records</td><td>Graph and node IDs on event activity records.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Procedure: isolate a capture failure</h3>
+  <ol class="steps">
+    <li><div>Run the same code without capture. Make sure that it gives correct results.</div></li>
+    <li><div>Run it one time more without capture. This loads modules and initializes libraries.</div></li>
+    <li><div>Check the return code of each call in the capture region. Record the first error that is not 901.</div></li>
+    <li><div>If the error is 900, find a sync, query, or allocation. Look in other threads too.</div></li>
+    <li><div>If the error is 904 or 905, draw the event edges. Make sure that each side stream forks from and joins to the origin stream.</div></li>
+    <li><div>If the capture fails only with other threads active, capture again in ThreadLocal mode.</div></li>
+    <li><div>After EndCapture, dump the graph with <code>cudaGraphDebugDotPrint</code>. Make sure that the node count is correct.</div></li>
+  </ol>
+</section>
+
+<!-- 16 -->
+<section id="sources">
+  <div class="eyebrow"><b>16</b> · References</div>
+  <h2>Sources</h2>
+  <ul class="plain refs">
+    <li><b>[G]</b> <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html">CUDA Programming Guide v13.5, §4.2 CUDA Graphs</a></li>
+    <li><b>[G2]</b> <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/programmatic-dependent-launch.html">CUDA Programming Guide v13.5, §4.5.3 PDL in CUDA Graphs</a></li>
+    <li><b>[G3]</b> <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/lazy-loading.html">CUDA Programming Guide v13.5, §4.9 Lazy Loading</a></li>
+    <li><b>[R]</b> <a href="https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__GRAPH.html">CUDA Runtime API 13.5: Graph Management</a>, <a href="https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__STREAM.html">Stream Management</a>, <a href="https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__TYPES.html">Data types (error codes)</a></li>
+    <li><b>[13.5]</b> <a href="https://developer.nvidia.com/blog/nvidia-cuda-13-5-brings-nvidia-vera-rubin-ga-support/">NVIDIA blog: CUDA 13.5</a>; <a href="https://docs.nvidia.com/cupti/13.5.0/release-notes/release-notes.html">CUPTI 13.5 release notes</a></li>
+    <li><b>[K]</b> <a href="https://developer.nvidia.com/blog/constant-time-launch-for-straight-line-cuda-graphs-and-other-performance-enhancements">NVIDIA blog: Constant time launch for straight-line CUDA graphs</a></li>
+    <li><b>[P]</b> <a href="https://developer.nvidia.com/blog/constructing-cuda-graphs-with-dynamic-parameters">NVIDIA blog: Constructing CUDA graphs with dynamic parameters</a>; <a href="https://developer.nvidia.com/blog/employing-cuda-graphs-in-a-dynamic-environment/">Employing CUDA graphs in a dynamic environment</a></li>
+    <li><b>[L]</b> <a href="https://developer.nvidia.com/blog/optimizing-llama-cpp-ai-inference-with-cuda-graphs">NVIDIA blog: Optimizing llama.cpp with CUDA graphs</a>; <a href="https://github.com/ggml-org/llama.cpp/pull/9017">llama.cpp PR #9017</a></li>
+    <li><b>[F]</b> <a href="https://fireworks.ai/blog/speed-python-pick-two-how-cuda-graphs-enable-fast-python-code-for-deep-learning">Fireworks: Speed, Python: pick two</a></li>
+    <li><b>[P2]</b> <a href="https://blog.prompt20.com/posts/cuda-graphs-and-torch-compile/">prompt20: CUDA graphs, torch.compile, FlashAttention</a></li>
+    <li><b>[D]</b> <a href="https://docs.nvidia.com/dl-cuda-graph/latest/troubleshooting/capture-failures.html">NVIDIA CUDA Graph Best Practices: capture failures</a>; <a href="https://docs.nvidia.com/dl-cuda-graph/latest/troubleshooting/performance-issues.html">performance issues</a></li>
+    <li><b>[B]</b> <a href="https://docs.nvidia.com/cuda/cublas/">cuBLAS documentation: CUDA Graphs support</a>; <b>[B2]</b> <a href="https://forums.developer.nvidia.com/t/bug-device-launched-graphs-cudaerrorinvalidvalue-with-cublas-combined-with-the-cudagraphinstantiateflagsdevicelaunch-starting-with-cuda-12-1/275644">NVIDIA forum: cuBLAS with device-launched graphs</a></li>
+    <li><b>[N]</b> <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/cudagraph.html">NCCL: Using NCCL with CUDA graphs</a></li>
+    <li><b>[C1]</b> <a href="https://github.com/NVIDIA/cuda-python/issues/2834">cuda-python #2834</a>; <b>[C2]</b> <a href="https://github.com/NVIDIA/cuda-python/issues/2918">cuda-python #2918</a></li>
+    <li><b>[T]</b> <a href="https://github.com/pytorch/pytorch/issues/205478">pytorch #205478: masked error in capture</a></li>
+    <li><b>[E]</b> <a href="https://forums.developer.nvidia.com/t/cuda-graphs-error-with-cudaeventelapsedtime-cudaeventinvalidvalue/205299">NVIDIA forum: cudaEventElapsedTime with events in a graph</a></li>
+    <li><b>[Z]</b> <a href="https://github.com/NVIDIA/Fuser/issues/635">NVIDIA/Fuser #635: kernel compiled during capture</a></li>
+    <li><b>[Y]</b> <a href="https://arxiv.org/abs/2503.19779">PyGraph (arXiv 2503.19779)</a></li>
+    <li><b>[V]</b> <a href="https://nvidia.github.io/TensorRT-LLM/blogs/tech_blog/blog20_Tuning_CUDA_Graph_Batch_Sizes_for_Higher_Output_Throughput.html">TensorRT-LLM: Tuning CUDA graph batch sizes</a></li>
+    <li><b>[X1]</b> <a href="https://x.com/_avichawla/status/2110667059264987423">Post on X: faster GPU, no token-latency gain</a>; <a href="https://x.com/sgl_project/status/2089476819452109068">SGLang on X: breakable CUDA graphs</a></li>
+  </ul>
+</section>
+
+<footer class="foot">
+  <span>Written from the CUDA 13.5 documentation and public reports, 2026-11-18. Behavior can change in later versions.</span>
+</footer>
+</main>
+</div>
+
+<script>
+(function(){
+  /* launch cost calculator */
+  var n=document.getElementById('cN'), s=document.getElementById('cS'), nv=document.getElementById('cNv'), sv=document.getElementById('cSv'), out=document.getElementById('cOut');
+  function fmt(us){return us>=1000?(us/1000).toFixed(2)+' ms':us.toFixed(us<10?2:1)+' µs';}
+  function calc(){
+    var N=+n.value, c=+s.value; nv.textContent=N; sv.textContent=c.toFixed(1)+' µs';
+    var st=N*c, g118=2+0.2*N, g126=N>=10?2.5+0.001*N:2+0.2*N;
+    out.innerHTML='';
+    [['Stream: N × launch',st,'hst'],['Graph, CUDA 11.8 (Ampere)',g118,'dst'],['Graph, CUDA 12.6+ (Ampere)',g126,'acc']].forEach(function(r){
+      var d=document.createElement('div'); d.className='o '+r[2];
+      d.innerHTML='<span class="k"></span><span class="v"></span><span class="r"></span>';
+      d.children[0].textContent=r[0]; d.children[1].textContent=fmt(r[1]);
+      d.children[2].textContent=r[1]===st?'baseline':(st/r[1]).toFixed(1)+'× less CPU time';
+      out.appendChild(d);
+    });
+  }
+  n.oninput=calc; s.oninput=calc; calc();
+
+  /* capture mode simulator */
+  var S={cap:'G',who:'B',tm:'G',op:'malloc'}, so=document.getElementById('simOut');
+  var MN={G:'Global',T:'ThreadLocal',R:'Relaxed'};
+  function simulate(){
+    var A=S.who==='A', ok, code, why;
+    if(S.op==='kern'){
+      if(A){ok=true;why='The kernel goes into thread A\'s own capturing stream. It becomes a kernel node.';}
+      else{ok=true;why='Thread B uses its own stream, which does not capture. The kernel runs at once. It is not part of the graph.';}
+    } else if(S.op==='query'){
+      ok=false;code='907 cudaErrorCapturedEvent';why='The event was last recorded in a capture. A query necessarily conflicts with capture. No mode permits it.';
+    } else if(S.op==='devsync'){
+      ok=false;code='900 cudaErrorStreamCaptureUnsupported';why='The device contains a capturing stream. You cannot sync a handle that includes an active capture, in any mode. The capture is invalidated.';
+    } else if(S.op==='legacy'){
+      ok=false;code='906 cudaErrorStreamCaptureImplicit';why='The legacy stream depends on all blocking streams, which include the capturing stream (if it is not created with cudaStreamNonBlocking). The capture is invalidated.';
+    } else {
+      var prohibited;
+      if(S.tm==='R'){prohibited=false;why='The caller\'s thread mode is Relaxed. Unsafe calls are permitted. ';}
+      else if(A){prohibited=S.cap!=='R';why=prohibited?'Thread A has a capture that did not start as Relaxed. Its thread mode is '+MN[S.tm]+'. ':'Thread A\'s capture started as Relaxed. ';}
+      else if(S.tm==='T'){prohibited=false;why='Thread B is ThreadLocal and has no capture. It ignores captures in other threads. ';}
+      else {prohibited=S.cap==='G';why=prohibited?'Thread B is Global, and thread A has a capture that started as Global. ':'Thread B is Global, but thread A\'s capture did not start as Global. ';}
+      if(prohibited){ok=false;code='900 cudaErrorStreamCaptureUnsupported';why+='cudaMalloc is prohibited.'+(A?' The capture is invalidated. Later calls return 901.':'');}
+      else{ok=true;why+='cudaMalloc runs now. It is not recorded in the graph. Replay uses this address.';}
+    }
+    so.className='simout '+(ok?'ok':'bad');
+    so.innerHTML='<b></b><span></span>';
+    so.children[0].textContent=ok?'Permitted':'Error: '+code;
+    so.children[1].textContent=why;
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#sim .chip'),function(b){
+    b.onclick=function(){
+      var g=b.dataset.g; S[g]=b.dataset.v;
+      Array.prototype.forEach.call(document.querySelectorAll('#sim .chip[data-g="'+g+'"]'),function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+      simulate();
+    };
+  });
+  simulate();
+
+  /* update checker */
+  var U=[
+    ['Kernel arguments','ok','cudaGraphExecKernelNodeSetParams, or whole graph update.','Same function, same context. If the graph uses UseNodePriority, the priority must not change.'],
+    ['Kernel grid / block size','ok','cudaGraphExecKernelNodeSetParams. From the device: cudaGraphKernelNodeSetGridDim on a device-updatable node.','Launch configuration is a node parameter.'],
+    ['Kernel function (same context)','ok','cudaGraphExecKernelNodeSetParams.','The owning context of the function must not change. A non-CDP function cannot become a CDP function.'],
+    ['1D memcpy address or size','ok','cudaGraphExecMemcpyNodeSetParams1D.','The device of the operands must not change. Memory must come from the same context.'],
+    ['2D / 3D memcpy, or memcpy kind','no','Instantiate again.','Only 1D memcpy and memset nodes can change. You cannot change the memory type or cudaMemcpyKind.'],
+    ['Event of a record / wait node','ok','cudaGraphExecEventRecordNodeSetEvent, …WaitNodeSetEvent.','No restrictions on host, event record, or event wait nodes.'],
+    ['Host function or its data','ok','cudaGraphExecHostNodeSetParams.','No restrictions on host nodes.'],
+    ['Child graph content','ok','cudaGraphExecChildGraphNodeSetParams.','The child topology must match. References in user objects are replaced.'],
+    ['Number of external semaphores','no','Instantiate again.','The count of semaphores cannot change.'],
+    ['Conditional default value','ok','Whole graph update.','Create and assign handles in the same order in both graphs. Node parameters (number of bodies, context) cannot change.'],
+    ['Skip one kernel this launch','ok','cudaGraphNodeSetEnabled(exec, node, 0).','Kernel, memset, memcpy nodes. The disabled node acts as an empty node. Updates still apply.'],
+    ['Add or remove a node or edge','no','Instantiate again.','Topology change. cudaGraphExecUpdate returns cudaGraphExecUpdateErrorTopologyChanged.'],
+    ['Change a node type','no','Instantiate again.','Returns cudaGraphExecUpdateErrorNodeTypeChanged.'],
+    ['Graph has memory nodes','warn','Whole graph update, with a limit.','You cannot update with a cudaGraph_t that is instantiated as a different exec.'],
+    ['Device graph was updated','warn','Update on the host, then upload again.','The device sees the change only after cudaGraphUpload or a host launch. A device launch during the update is undefined behavior.']
+  ];
+  var ur=document.getElementById('updRow'), uo=document.getElementById('updOut');
+  function showU(i){
+    Array.prototype.forEach.call(ur.children,function(b,j){b.setAttribute('aria-pressed',j===i?'true':'false');});
+    var u=U[i]; uo.className='simout '+(u[1]==='ok'?'ok':u[1]==='no'?'bad':'warn');
+    uo.innerHTML='<b></b><span class="api"></span><span></span>';
+    uo.children[0].textContent=u[1]==='ok'?'Update in place':u[1]==='no'?'Update not possible':'Possible, with conditions';
+    uo.children[1].textContent=u[2]; uo.children[2].textContent=u[3];
+  }
+  U.forEach(function(u,i){var b=document.createElement('button');b.className='chip';b.textContent=u[0];b.onclick=function(){showU(i);};ur.appendChild(b);});
+  showU(0);
+
+  /* gotcha filter */
+  Array.prototype.forEach.call(document.querySelectorAll('#gf .chip'),function(b){
+    b.onclick=function(){
+      var f=b.dataset.f;
+      Array.prototype.forEach.call(document.querySelectorAll('#gf .chip'),function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+      Array.prototype.forEach.call(document.querySelectorAll('#gt tbody tr'),function(r){r.hidden=!(f==='all'||r.dataset.k===f);});
+    };
+  });
+})();
+</script>
+</body></html>
